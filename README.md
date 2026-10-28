@@ -119,3 +119,43 @@ Run it:
 ```powershell
 python load_pdf.py
 ```
+
+## Step 8: Create embeddings
+
+**Direction note:** the diagram used Azure OpenAI embeddings, but these notes use `OpenAIEmbeddings` with an OpenAI API key. The code below follows the OpenAI version. Azure OpenAI can be swapped in later by using `AzureOpenAIEmbeddings`.
+
+Key ideas:
+
+- An embedding model turns text into a list of numbers (an embedding vector).
+- `embed_documents()` converts a list of chunk texts into vectors.
+- `embed_query()` converts the user's question into a vector for similarity search.
+- Chunk vectors are stored in a vector store next to their text; at query time the question vector is compared with them to find relevant context.
+
+Setup:
+
+```powershell
+pip install langchain-openai
+pip freeze > requirements.txt
+```
+
+Put your key in a `.env` file (already ignored by git). Use [.env.example](.env.example) as the template:
+
+```
+OPENAI_API_KEY=your-key-here
+```
+
+Or set it for the current PowerShell session only:
+
+```powershell
+$env:OPENAI_API_KEY="your-key"
+```
+
+The code is in [embeddings_demo.py](embeddings_demo.py). It uses the `text-embedding-3-large` model, embeds two sample sentences and one query, and prints the first document vector and the query vector length.
+
+Run it:
+
+```powershell
+python embeddings_demo.py
+```
+
+Without a key, `OpenAIEmbeddings` raises an error when it is created. Note: your pasted code created `embedding_model` but then called `embeddings.embed_documents(...)`, which would fail with a `NameError`; the file uses `embedding_model` throughout.
