@@ -1,0 +1,14 @@
+# Virtual environment
+.venv/
+
+# Secrets (Azure keys)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
