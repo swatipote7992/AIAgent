@@ -98,3 +98,24 @@ Check what git will track:
 ```powershell
 git status --short
 ```
+
+## Step 7: Preserve metadata
+
+Each chunk must keep track of where it came from, so answers can cite the right policy section. The logic is in [metadata.py](metadata.py) and is called from [load_pdf.py](load_pdf.py) after cleaning.
+
+Every page (and therefore every chunk, because the text splitter copies page metadata onto its chunks) carries:
+
+- `source`: the file name only, for example `insurance_policy.pdf` (not the local path).
+- `page`: zero-based page index from the loader, and `page_label`: the human page number.
+- `total_pages`.
+- `policy_type`, `document_version`, `product_id` and `access_level` (the extra fields; `access_level` can later be used as a search filter for permissions).
+
+The default values for the sample policy are set at the top of [metadata.py](metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
+
+Verified: after a test split into 20 chunks, every chunk had all of these fields.
+
+Run it:
+
+```powershell
+python load_pdf.py
+```
