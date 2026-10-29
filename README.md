@@ -1,14 +1,14 @@
 # AIAgent
 
-A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI embeddings (`text-embedding-3-small`) and Azure AI Search, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
+A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI (`text-embedding-3-small` for embeddings, `gpt-4.1-mini` for answers) and Azure AI Search, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
 
-**Status:** the indexing pipeline and retrieval work end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index, and a question retrieves the most relevant chunks. Generating the final answer with a chat model is not built yet (see [Next steps](#next-steps)).
+**Status:** the whole RAG flow works end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index. A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with page citations.
 
 ## Project layout
 
 | File | Purpose |
 | --- | --- |
-| [main.py](main.py) | Entry point that runs the indexing pipeline, then a sample retrieval |
+| [main.py](main.py) | Entry point that runs the indexing pipeline, then answers a sample question |
 | [load_pdf.py](load_pdf.py) | Loads the PDF, one document per page |
 | [clean_text.py](clean_text.py) | Cleans the extracted text |
 | [metadata.py](metadata.py) | Adds source, page and policy metadata |
@@ -16,6 +16,7 @@ A RAG project over PDF insurance policy documents, built with LangChain, Azure O
 | [embeddings.py](embeddings.py) | Creates the Azure OpenAI embedding model |
 | [vector_store.py](vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
 | [retrieval.py](retrieval.py) | Retrieves the chunks most relevant to a question |
+| [answer.py](answer.py) | Sends the question and retrieved chunks to the chat model and returns the answer |
 | [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
 | [.env.example](.env.example) | Template for the settings in `.env` |
 | [requirements.txt](requirements.txt) | Pinned dependencies |
@@ -54,7 +55,7 @@ pip install -r requirements.txt
 ### Create the Azure resources and set the settings
 
 1. Create an Azure AI Search service and note its endpoint and admin key.
-2. In Azure OpenAI, deploy the `text-embedding-3-small` embedding model and note the endpoint, key, deployment name and API version.
+2. In Azure OpenAI, deploy the `text-embedding-3-small` embedding model and a chat model (`gpt-4.1-mini`), and note the endpoint, key, deployment names and API version.
 3. Copy [.env.example](.env.example) to `.env` and fill in the values:
 
 | Setting | Meaning | Default if omitted |
@@ -63,6 +64,8 @@ pip install -r requirements.txt
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI key | required |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Name of your embedding deployment | `text-embedding-3-small` |
 | `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version | `2024-10-21` |
+| `AZURE_OPENAI_CHAT_DEPLOYMENT` | Name of your chat model deployment | `gpt-4.1-mini` |
+| `AZURE_OPENAI_CHAT_API_VERSION` | API version for the chat model | same as `AZURE_OPENAI_API_VERSION` |
 | `AZURE_SEARCH_ENDPOINT` | Azure AI Search endpoint | required |
 | `AZURE_SEARCH_KEY` | Azure AI Search admin key | required |
 | `AZURE_SEARCH_INDEX` | Index name | `insurance-policies` |
@@ -88,7 +91,7 @@ git status --short
 
 ## main.py: the entry point
 
-[main.py](main.py) runs the indexing pipeline and then a sample retrieval. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before retrieving. Set the project up first (see [Setup](#setup)), then run:
+[main.py](main.py) runs the indexing pipeline and then answers a sample question. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before answering. Set the project up first (see [Setup](#setup)), then run:
 
 ```powershell
 python main.py
@@ -104,11 +107,12 @@ python main.py
 | 4 | Split into chunks | [chunking.py](chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
 | 5 | Embed and store the chunks | [vector_store.py](vector_store.py) (uses the model from [embeddings.py](embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
 
-Retrieval then runs on the stored index:
+Retrieval and generation then run on the stored index:
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 6 | Retrieve relevant chunks | [retrieval.py](retrieval.py) | `retrieve()` | the 4 chunks most relevant to the question |
+| 6 | Retrieve relevant chunks | [retrieval.py](retrieval.py) | `get_retriever()` | a retriever returning the 4 chunks most relevant to the question |
+| 7 | Generate the answer | [answer.py](answer.py) | `answer_question()` | the answer plus the chunks it was based on |
 
 Each stage is described below in the same order.
 
@@ -219,7 +223,7 @@ You can check the same things in the Azure portal: the document count, and the v
 
 `get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
 
-[main.py](main.py) asks a sample question (the `QUESTION` constant at the top) and prints the source, page and the first 200 characters of each returned chunk.
+This stage is used by [answer.py](answer.py), which is what [main.py](main.py) calls. `retrieve(question)` can also be called on its own to look at the raw chunks for a question.
 
 ### Search types
 
@@ -244,10 +248,42 @@ You can check the same things in the Azure portal: the document count, and the v
 
 - `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `main.py`) with the configuration defined.
 
+## Stage 7: Generate the answer ([answer.py](answer.py))
+
+### How it works
+
+`answer_question()` in [answer.py](answer.py) runs the standard RAG chain from the diagram:
+
+1. `get_chat_model()` creates `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
+2. A `ChatPromptTemplate` has a system message with the rules and a `{context}` slot, and a human message with the question.
+3. `create_stuff_documents_chain` puts the retrieved chunks into `{context}`. Each chunk is shown to the model as `[source, page N]` followed by its text, so the model can cite pages.
+4. `create_retrieval_chain` ties it together: the retriever from Stage 6 finds the chunks, the chain fills the prompt and calls the model.
+
+It returns the answer and the chunks that were sent, so the answer can be checked against its sources. [main.py](main.py) asks a sample question (the `QUESTION` constant at the top) and prints the answer and the retrieved chunks.
+
+### The system prompt rules
+
+- Answer only from the policy context; if it does not contain the answer, say the policy provided does not cover it. This matters because retrieval always returns 4 chunks, even for questions the policy never mentions.
+- Quote loadings, limits and decisions exactly as written.
+- Cite the source and page for each fact.
+
+### Verified results
+
+- "What underwriting decision applies to a smoker with a BMI of 32?" The answer gave smoker: Accept with Loading +20% and BMI 30 to 34.9: Accept with Loading +15%, said they are added together, and cited pages 5 and 11. These match the policy.
+- "Am I covered for flood damage?" The answer said the policy does not cover flood damage because the exclusions and coverage details do not mention it, instead of inventing an answer.
+
+### Known limitations
+
+- The flood answer cited pages 2 and 8 to 10, which do not mention floods. The citations can point at pages that were merely retrieved, not pages that support the statement.
+- "Does not cover" is slightly stronger than "does not mention". The prompt could ask the model to say "the policy does not mention it".
+- The model never sees the unrelated parts of the policy; it only sees the 4 retrieved chunks, so a question whose answer spans more pages may be answered incompletely. Raising `k` helps at a token cost.
+
 ## Next steps
 
 - Delete stale entries when a document is edited and produces fewer chunks (or rebuild the index).
 - Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
 - Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
-- Build the answer chain: the retriever, `ChatPromptTemplate`, `AzureChatOpenAI`, `create_retrieval_chain` with `create_stuff_documents_chain`. The prompt must handle questions the policy does not answer.
+- Tighten the prompt so it says "not mentioned" rather than "not covered" and cites only pages that support a statement.
+- Let the user type questions (a simple loop or command-line argument) instead of the fixed `QUESTION`.
+- Split `main.py` so indexing and answering can be run separately; indexing does not need to repeat for every question.
 - Add a script to rebuild the index when the documents or the embedding model change.

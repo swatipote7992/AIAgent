@@ -4,7 +4,7 @@ from clean_text import clean_documents
 from load_pdf import load_pdf
 from metadata import enrich_metadata
 from chunking import create_chunk
-from retrieval import retrieve
+from answer import answer_question
 from vector_store import store_chunks
 
 PDF_PATH = Path(__file__).parent / "insurance_policy.pdf"
@@ -36,13 +36,14 @@ def main():
     ids = store_chunks(chunks)
     print(f"Stored {len(ids)} chunks in the Azure AI Search index")
 
-    #### Retrieval ####
-    # Find the chunks most relevant to the question
+    #### Retrieval and Generation ####
+    # Retrieve the relevant chunks and let the chat model answer from them
     print("----------------------------")
     print(f"Question: {QUESTION}")
-    retrieved = retrieve(QUESTION)
-    for chunk in retrieved:
-        print(f"[{chunk.metadata.get('source')}, page {chunk.metadata.get('page_label')}] {chunk.page_content[:200]!r}")
+    result = answer_question(QUESTION)
+    print(f"Answer: {result['answer']}")
+    for chunk in result["context"]:
+        print(f"  retrieved: [{chunk.metadata.get('source')}, page {chunk.metadata.get('page_label')}] {chunk.page_content[:80]!r}")
 
 
 if __name__ == "__main__":
