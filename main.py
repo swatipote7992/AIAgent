@@ -10,6 +10,7 @@ PDF_PATH = Path(__file__).parent / "insurance_policy.pdf"
 
 
 def main():
+    #### Indexing Pipeline ####
     #Load the PDF and split it into pages
     documents = load_pdf(PDF_PATH)
     print(f"Loaded {len(documents)} pages")

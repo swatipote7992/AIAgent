@@ -1,27 +1,14 @@
 # AIAgent
 
-A RAG project over PDF insurance policy documents, built with LangChain and OpenAI embeddings, managed with **pip** and `requirements.txt`. This file also logs how the project was set up. Commands are for Windows PowerShell, run from the project root.
+A RAG project over PDF insurance policy documents, built with LangChain and OpenAI embeddings, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
 
 **Current direction:** OpenAI embeddings (`text-embedding-3-large`). The original diagram used Azure OpenAI and Azure AI Search; Azure OpenAI can be swapped in later with `AzureOpenAIEmbeddings`. The vector store is not chosen yet.
 
-## Project layout
+## Setup
 
-| File | Purpose |
-| --- | --- |
-| [main.py](main.py) | Entry point that runs the whole pipeline |
-| [load_pdf.py](load_pdf.py) | Loads the PDF, one document per page |
-| [clean_text.py](clean_text.py) | Cleans the extracted text |
-| [metadata.py](metadata.py) | Adds source, page and policy metadata |
-| [chunking.py](chunking.py) | Splits pages into overlapping chunks |
-| [embeddings.py](embeddings.py) | Turns chunks into embedding vectors |
-| [embeddings_demo.py](embeddings_demo.py) | Small standalone demo of the embedding methods |
-| [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
-| [.env.example](.env.example) | Template for the API key |
-| [requirements.txt](requirements.txt) | Pinned dependencies |
+Do this once before running `main.py`.
 
-## Part 1: Setup
-
-### Step 1: Create a virtual environment
+### Create a virtual environment
 
 ```powershell
 python -m venv .venv
@@ -34,7 +21,32 @@ If activation is blocked, run this once:
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-### Step 2: Add a .gitignore
+### Install dependencies
+
+```powershell
+pip install langchain langchain-community pypdf langchain-openai
+pip freeze > requirements.txt
+```
+
+To recreate the environment elsewhere:
+
+```powershell
+pip install -r requirements.txt
+```
+
+### Set the OpenAI API key
+
+Put your key in a `.env` file. Use [.env.example](.env.example) as the template.
+
+Or set it for the current PowerShell session only:
+
+```powershell
+$env:OPENAI_API_KEY="your-key"
+```
+
+Without a key, `OpenAIEmbeddings` raises a "Missing credentials" error when it is created.
+
+### Git ignore
 
 [.gitignore](.gitignore) keeps generated and sensitive files out of git:
 
@@ -49,36 +61,31 @@ Check what git will track:
 git status --short
 ```
 
-### Step 3: Install dependencies
+## main.py: the entry point
+
+[main.py](main.py) runs the whole pipeline. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. Set the project up first (see [Setup](#setup)), then run:
 
 ```powershell
-pip install langchain langchain-community pypdf langchain-openai
-pip freeze > requirements.txt
+python main.py
 ```
 
-To recreate the environment elsewhere:
+### Indexing Pipeline
 
-```powershell
-pip install -r requirements.txt
-```
+| # | Stage | File | Function | Output |
+| --- | --- | --- | --- | --- |
+| 1 | Load the PDF | [load_pdf.py](load_pdf.py) | `load_pdf()` | one document per page |
+| 2 | Clean the text | [clean_text.py](clean_text.py) | `clean_documents()` | cleaned pages |
+| 3 | Add metadata | [metadata.py](metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
+| 4 | Split into chunks | [chunking.py](chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
+| 5 | Embed the chunks | [embeddings.py](embeddings.py) | `embed_chunks()` | one embedding vector per chunk |
 
-### Step 4: Set the OpenAI API key
+Each stage is described below in the same order.
 
-Put your key in a `.env` file (already ignored by git). Use [.env.example](.env.example) as the template.
+## Stage 1: Load the PDF ([load_pdf.py](load_pdf.py))
 
-Or set it for the current PowerShell session only:
+`load_pdf()` uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
 
-```powershell
-$env:OPENAI_API_KEY="your-key"
-```
-
-Without a key, `OpenAIEmbeddings` raises a "Missing credentials" error when it is created.
-
-## Part 2: Input data
-
-### Step 5: Sample insurance policy PDF
-
-A fictional sample policy is at [insurance_policy.pdf](insurance_policy.pdf) so the pipeline has data to work with. It has 14 pages and covers:
+The input is the fictional sample policy [insurance_policy.pdf](insurance_policy.pdf). It has 14 pages and covers:
 
 - Definitions, scope of cover and the underwriting process (pages 1-4)
 - Underwriting decision matrix by age, BMI and smoking (page 5)
@@ -87,21 +94,9 @@ A fictional sample policy is at [insurance_policy.pdf](insurance_policy.pdf) so 
 - General exclusions, waiting periods, premiums and loadings, claims (pages 9-12)
 - Appeals and review of underwriting decisions (page 13) and contact details (page 14)
 
-## Part 3: The ingestion pipeline
+## Stage 2: Clean and prepare the extracted text ([clean_text.py](clean_text.py))
 
-[main.py](main.py) runs the stages below in order and prints a summary after each one.
-
-```powershell
-python main.py
-```
-
-### Step 6: Load the PDF
-
-`load_pdf()` in [load_pdf.py](load_pdf.py) uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
-
-### Step 7: Clean and prepare the extracted text
-
-Poor extraction produces poor chunks, so pages are cleaned before splitting. The logic is in [clean_text.py](clean_text.py).
+Poor extraction produces poor chunks, so pages are cleaned before splitting.
 
 What it does:
 
@@ -118,9 +113,9 @@ What it deliberately does not touch, so policy accuracy is protected:
 
 Verified: the sample PDF still has 14 pages after cleaning (it has no headers or footers). A synthetic test with fake headers, footers and an empty page removed only those and kept every numbered clause.
 
-### Step 8: Preserve metadata
+## Stage 3: Preserve metadata ([metadata.py](metadata.py))
 
-Each chunk must keep track of where it came from, so answers can cite the right policy section. The logic is in [metadata.py](metadata.py).
+Each chunk must keep track of where it came from, so answers can cite the right policy section.
 
 Every page, and therefore every chunk (the splitter copies page metadata onto its chunks), carries:
 
@@ -131,9 +126,9 @@ Every page, and therefore every chunk (the splitter copies page metadata onto it
 
 The default values for the sample policy are set at the top of [metadata.py](metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
 
-### Step 9: Split the pages into chunks
+## Stage 4: Split the pages into chunks ([chunking.py](chunking.py))
 
-`create_chunk()` in [chunking.py](chunking.py) uses LangChain's `RecursiveCharacterTextSplitter`.
+`create_chunk()` uses LangChain's `RecursiveCharacterTextSplitter`.
 
 - **Chunk size:** 500 characters.
 - **Overlap:** 50 characters, so a clause cut at a chunk boundary still appears with its surrounding context in the next chunk.
@@ -144,9 +139,9 @@ The two values are constants at the top of [chunking.py](chunking.py) and can be
 
 Verified: 14 cleaned pages are split into 20 chunks, none longer than 500 characters, and every chunk has its metadata.
 
-### Step 10: Embed the chunks
+## Stage 5: Embed the chunks ([embeddings.py](embeddings.py))
 
-`embed_chunks()` in [embeddings.py](embeddings.py) turns each chunk into an embedding vector.
+`embed_chunks()` turns each chunk into an embedding vector.
 
 - It uses `OpenAIEmbeddings` with the `text-embedding-3-large` model and reads `OPENAI_API_KEY` from `.env`.
 - It embeds the text of every chunk in one call to `embed_documents()`.
@@ -155,14 +150,14 @@ Verified: 14 cleaned pages are split into 20 chunks, none longer than 500 charac
 
 Verified: 20 chunks produce 20 embeddings of length 3072.
 
-## Part 4: Background on embeddings
+### Background on embeddings
 
 - An embedding model turns text into a list of numbers (an embedding vector).
 - `embed_documents()` converts a list of chunk texts into vectors.
 - `embed_query()` converts the user's question into a vector for similarity search.
 - Chunk vectors are stored in a vector store next to their text; at query time the question vector is compared with them to find relevant context.
 
-[embeddings_demo.py](embeddings_demo.py) shows both methods on two sample sentences and one query. Run it:
+[embeddings_demo.py](embeddings_demo.py) is a standalone demo of both methods on two sample sentences and one query. It is not part of `main.py`. Run it:
 
 ```powershell
 python embeddings_demo.py
@@ -172,8 +167,3 @@ python embeddings_demo.py
 
 - Store the chunks, vectors and metadata in a vector store (Azure AI Search, or a local store such as FAISS or Chroma).
 - Build the retrieval and answer chain: retriever, `ChatPromptTemplate`, chat model, `create_retrieval_chain` with `create_stuff_documents_chain`.
-
-## Superseded options (not used)
-
-- **uv** (`uv init --bare`, `uv add`): replaced by pip. The leftover `pyproject.toml` and `uv.lock` were deleted.
-- A `src/` + `tests/` layout and a single empty `main.py` were considered but not created.
