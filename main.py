@@ -4,9 +4,11 @@ from clean_text import clean_documents
 from load_pdf import load_pdf
 from metadata import enrich_metadata
 from chunking import create_chunk
+from retrieval import retrieve
 from vector_store import store_chunks
 
 PDF_PATH = Path(__file__).parent / "insurance_policy.pdf"
+QUESTION = "What underwriting decision applies to a smoker with a BMI of 32?"
 
 
 def main():
@@ -33,6 +35,14 @@ def main():
     # Embed each chunk and store text, vector and metadata in Azure AI Search
     ids = store_chunks(chunks)
     print(f"Stored {len(ids)} chunks in the Azure AI Search index")
+
+    #### Retrieval ####
+    # Find the chunks most relevant to the question
+    print("----------------------------")
+    print(f"Question: {QUESTION}")
+    retrieved = retrieve(QUESTION)
+    for chunk in retrieved:
+        print(f"[{chunk.metadata.get('source')}, page {chunk.metadata.get('page_label')}] {chunk.page_content[:200]!r}")
 
 
 if __name__ == "__main__":

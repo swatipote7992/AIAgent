@@ -2,19 +2,20 @@
 
 A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI embeddings (`text-embedding-3-small`) and Azure AI Search, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
 
-**Status:** the indexing pipeline works end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index. Querying the index and generating answers is not built yet (see [Next steps](#next-steps)).
+**Status:** the indexing pipeline and retrieval work end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index, and a question retrieves the most relevant chunks. Generating the final answer with a chat model is not built yet (see [Next steps](#next-steps)).
 
 ## Project layout
 
 | File | Purpose |
 | --- | --- |
-| [main.py](main.py) | Entry point that runs the whole indexing pipeline |
+| [main.py](main.py) | Entry point that runs the indexing pipeline, then a sample retrieval |
 | [load_pdf.py](load_pdf.py) | Loads the PDF, one document per page |
 | [clean_text.py](clean_text.py) | Cleans the extracted text |
 | [metadata.py](metadata.py) | Adds source, page and policy metadata |
 | [chunking.py](chunking.py) | Splits pages into overlapping chunks |
 | [embeddings.py](embeddings.py) | Creates the Azure OpenAI embedding model |
 | [vector_store.py](vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
+| [retrieval.py](retrieval.py) | Retrieves the chunks most relevant to a question |
 | [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
 | [.env.example](.env.example) | Template for the settings in `.env` |
 | [requirements.txt](requirements.txt) | Pinned dependencies |
@@ -87,7 +88,7 @@ git status --short
 
 ## main.py: the entry point
 
-[main.py](main.py) runs the whole indexing pipeline. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Set the project up first (see [Setup](#setup)), then run:
+[main.py](main.py) runs the indexing pipeline and then a sample retrieval. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before retrieving. Set the project up first (see [Setup](#setup)), then run:
 
 ```powershell
 python main.py
@@ -102,6 +103,12 @@ python main.py
 | 3 | Add metadata | [metadata.py](metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
 | 4 | Split into chunks | [chunking.py](chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
 | 5 | Embed and store the chunks | [vector_store.py](vector_store.py) (uses the model from [embeddings.py](embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
+
+Retrieval then runs on the stored index:
+
+| # | Stage | File | Function | Output |
+| --- | --- | --- | --- | --- |
+| 6 | Retrieve relevant chunks | [retrieval.py](retrieval.py) | `retrieve()` | the 4 chunks most relevant to the question |
 
 Each stage is described below in the same order.
 
@@ -206,10 +213,41 @@ You can check the same things in the Azure portal: the document count, and the v
 - Metadata is stored as one field, so it cannot be used for filtering. To filter on `access_level` or `document_version`, the index fields have to be defined explicitly.
 - `langchain-community` prints a deprecation warning saying it is being sunset. It does not affect the pipeline today.
 
+## Stage 6: Retrieve relevant chunks ([retrieval.py](retrieval.py))
+
+### How it works
+
+`get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
+
+[main.py](main.py) asks a sample question (the `QUESTION` constant at the top) and prints the source, page and the first 200 characters of each returned chunk.
+
+### Search types
+
+| Type | What it does | Status |
+| --- | --- | --- |
+| `similarity` | vector search only | works |
+| `hybrid` (default) | vector plus keyword search, merged into one ranking | works |
+| `semantic_hybrid` | hybrid plus Azure's semantic reranker | fails: the index has no semantic configuration |
+
+`k` (default 4) is the number of chunks returned. Keep it small (3 to 5), because extra chunks add noise and cost tokens. `k` is passed to `as_retriever` directly; putting it inside `search_kwargs`, as many examples do, fails in this LangChain version with "got multiple values for keyword argument 'k'".
+
+### Filters
+
+`get_retriever(filters=...)` accepts an OData filter string for when only some documents should be searched. Metadata is stored as one JSON text field, so for now a filter can only match inside that text, for example `search.ismatch('individual_health', 'metadata')`. The filter was accepted by Azure, but with a single policy in the index it cannot yet show documents being excluded. Proper filters on `access_level` or `document_version` need explicit index fields (see Next steps).
+
+### Verified results
+
+- Question: "What underwriting decision applies to a smoker with a BMI of 32?" The top chunks were the underwriting decision matrix (page 5), the premium example with exactly a smoker at BMI 32 (page 11), the underwriting process (page 4) and the medical conditions table (page 6). With `hybrid` the premium example ranked first; with `similarity` the matrix did.
+- Question: "Am I covered for flood damage?" The policy says nothing about floods, but retrieval still returned 4 chunks (General Exclusions, Definitions, and others). Retrieval always returns `k` chunks, even when none is relevant, so the answer step must be told to say "not covered in the policy" when the context does not contain the answer.
+
+### Known limitations
+
+- `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `main.py`) with the configuration defined.
+
 ## Next steps
 
 - Delete stale entries when a document is edited and produces fewer chunks (or rebuild the index).
 - Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
-- Add retrieval: search the index with a question, using hybrid search and semantic ranking.
-- Build the answer chain: retriever, `ChatPromptTemplate`, `AzureChatOpenAI`, `create_retrieval_chain` with `create_stuff_documents_chain`.
+- Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
+- Build the answer chain: the retriever, `ChatPromptTemplate`, `AzureChatOpenAI`, `create_retrieval_chain` with `create_stuff_documents_chain`. The prompt must handle questions the policy does not answer.
 - Add a script to rebuild the index when the documents or the embedding model change.
