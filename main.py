@@ -4,7 +4,7 @@ from clean_text import clean_documents
 from load_pdf import load_pdf
 from metadata import enrich_metadata
 from chunking import create_chunk
-from embeddings import embed_chunks
+from vector_store import store_chunks
 
 PDF_PATH = Path(__file__).parent / "insurance_policy.pdf"
 
@@ -30,9 +30,9 @@ def main():
     print(f"Tenth Chunk: {chunks[9]}")
     print("----------------------------")
 
-    # Convert each chunk into an embedding vector
-    vectors = embed_chunks(chunks)
-    print(f"Created {len(vectors)} embeddings of length {len(vectors[0])}")
+    # Embed each chunk and store text, vector and metadata in Azure AI Search
+    ids = store_chunks(chunks)
+    print(f"Stored {len(ids)} chunks in the Azure AI Search index")
 
 
 if __name__ == "__main__":

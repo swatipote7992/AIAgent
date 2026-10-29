@@ -1,8 +1,24 @@
 # AIAgent
 
-A RAG project over PDF insurance policy documents, built with LangChain and OpenAI embeddings, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
+A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI embeddings (`text-embedding-3-small`) and Azure AI Search, managed with **pip** and `requirements.txt`. Commands are for Windows PowerShell, run from the project root.
 
-**Current direction:** OpenAI embeddings (`text-embedding-3-large`). The original diagram used Azure OpenAI and Azure AI Search; Azure OpenAI can be swapped in later with `AzureOpenAIEmbeddings`. The vector store is not chosen yet.
+**Status:** the indexing pipeline works end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index. Querying the index and generating answers is not built yet (see [Next steps](#next-steps)).
+
+## Project layout
+
+| File | Purpose |
+| --- | --- |
+| [main.py](main.py) | Entry point that runs the whole indexing pipeline |
+| [load_pdf.py](load_pdf.py) | Loads the PDF, one document per page |
+| [clean_text.py](clean_text.py) | Cleans the extracted text |
+| [metadata.py](metadata.py) | Adds source, page and policy metadata |
+| [chunking.py](chunking.py) | Splits pages into overlapping chunks |
+| [embeddings.py](embeddings.py) | Creates the Azure OpenAI embedding model |
+| [vector_store.py](vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
+| [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
+| [.env.example](.env.example) | Template for the settings in `.env` |
+| [requirements.txt](requirements.txt) | Pinned dependencies |
+| [.gitignore](.gitignore) | Keeps `.venv`, `.env` and caches out of git |
 
 ## Setup
 
@@ -24,7 +40,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ### Install dependencies
 
 ```powershell
-pip install langchain langchain-community pypdf langchain-openai
+pip install langchain langchain-community pypdf langchain-openai azure-search-documents python-dotenv
 pip freeze > requirements.txt
 ```
 
@@ -34,24 +50,32 @@ To recreate the environment elsewhere:
 pip install -r requirements.txt
 ```
 
-### Set the OpenAI API key
+### Create the Azure resources and set the settings
 
-Put your key in a `.env` file. Use [.env.example](.env.example) as the template.
+1. Create an Azure AI Search service and note its endpoint and admin key.
+2. In Azure OpenAI, deploy the `text-embedding-3-small` embedding model and note the endpoint, key, deployment name and API version.
+3. Copy [.env.example](.env.example) to `.env` and fill in the values:
 
-Or set it for the current PowerShell session only:
+| Setting | Meaning | Default if omitted |
+| --- | --- | --- |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint | required |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI key | required |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Name of your embedding deployment | `text-embedding-3-small` |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version | `2024-10-21` |
+| `AZURE_SEARCH_ENDPOINT` | Azure AI Search endpoint | required |
+| `AZURE_SEARCH_KEY` | Azure AI Search admin key | required |
+| `AZURE_SEARCH_INDEX` | Index name | `insurance-policies` |
 
-```powershell
-$env:OPENAI_API_KEY="your-key"
-```
+The deployment name, endpoint and API version must match what you created in Azure. If a required setting is missing, `main.py` stops with a "Missing settings in .env" message naming it.
 
-Without a key, `OpenAIEmbeddings` raises a "Missing credentials" error when it is created.
+`OPENAI_API_KEY` appears in [.env.example](.env.example) but nothing in the project uses it any more.
 
 ### Git ignore
 
 [.gitignore](.gitignore) keeps generated and sensitive files out of git:
 
 - The virtual environment (`.venv/`).
-- The `.env` file, which holds the API key.
+- The `.env` file, which holds the keys.
 - Python cache (`__pycache__/`, `*.pyc`).
 - Tool caches (`.mypy_cache/`, `.ruff_cache/`, `.pytest_cache/`).
 
@@ -63,13 +87,13 @@ git status --short
 
 ## main.py: the entry point
 
-[main.py](main.py) runs the whole pipeline. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. Set the project up first (see [Setup](#setup)), then run:
+[main.py](main.py) runs the whole indexing pipeline. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Set the project up first (see [Setup](#setup)), then run:
 
 ```powershell
 python main.py
 ```
 
-### Indexing Pipeline
+### Indexing pipeline
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
@@ -77,7 +101,7 @@ python main.py
 | 2 | Clean the text | [clean_text.py](clean_text.py) | `clean_documents()` | cleaned pages |
 | 3 | Add metadata | [metadata.py](metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
 | 4 | Split into chunks | [chunking.py](chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
-| 5 | Embed the chunks | [embeddings.py](embeddings.py) | `embed_chunks()` | one embedding vector per chunk |
+| 5 | Embed and store the chunks | [vector_store.py](vector_store.py) (uses the model from [embeddings.py](embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
 
 Each stage is described below in the same order.
 
@@ -139,31 +163,53 @@ The two values are constants at the top of [chunking.py](chunking.py) and can be
 
 Verified: 14 cleaned pages are split into 20 chunks, none longer than 500 characters, and every chunk has its metadata.
 
-## Stage 5: Embed the chunks ([embeddings.py](embeddings.py))
+## Stage 5: Embed and store the chunks ([vector_store.py](vector_store.py), [embeddings.py](embeddings.py))
 
-`embed_chunks()` turns each chunk into an embedding vector.
+### How it works
 
-- It uses `OpenAIEmbeddings` with the `text-embedding-3-large` model and reads `OPENAI_API_KEY` from `.env`.
-- It embeds the text of every chunk in one call to `embed_documents()`.
-- The returned list is in the same order as the chunks: vector `i` belongs to chunk `i`. Metadata stays on the chunk, so vectors and metadata can be stored together in the vector store.
-- It makes a real OpenAI API call each time `main.py` runs, so it uses a small amount of API credit.
+`get_embedding_model()` in [embeddings.py](embeddings.py) creates the Azure OpenAI embedding model from the `.env` settings. `store_chunks()` in [vector_store.py](vector_store.py) creates an `AzureSearch` vector store pointing at the Azure AI Search index and calls `add_documents()`. LangChain embeds each chunk and uploads its text, vector and metadata, so there is no separate embedding step in `main.py`.
 
-Verified: 20 chunks produce 20 embeddings of length 3072.
-
-### Background on embeddings
+Background on embeddings:
 
 - An embedding model turns text into a list of numbers (an embedding vector).
-- `embed_documents()` converts a list of chunk texts into vectors.
-- `embed_query()` converts the user's question into a vector for similarity search.
-- Chunk vectors are stored in a vector store next to their text; at query time the question vector is compared with them to find relevant context.
+- `embed_documents()` converts a list of chunk texts into vectors. This is what happens during indexing.
+- `embed_query()` converts the user's question into a vector for similarity search. This will be used when querying.
+- At query time the question vector is compared with the stored chunk vectors to find the relevant context.
 
-[embeddings_demo.py](embeddings_demo.py) is a standalone demo of both methods on two sample sentences and one query. It is not part of `main.py`. Run it:
+### What is stored for each chunk
 
-```powershell
-python embeddings_demo.py
-```
+- `id`: a stable ID (see below).
+- `content`: the chunk text.
+- `content_vector`: the embedding (1,536 numbers for `text-embedding-3-small`).
+- `metadata`: source, page and the policy fields from Stage 3, stored together as one JSON field.
+
+### Design choices
+
+- **Stable IDs:** each chunk gets an ID built from product, version, page and chunk number (for example `NH-2026-01-v3-2-p0-c0`). Running again updates the same entries instead of creating duplicates (verified, see Known limitations).
+- **Index creation:** if the index does not exist, LangChain creates it using the embedding size. The index vector size must match the embedding model, so if you change the model, delete the index (or use a new index name) and re-embed everything.
+- **Batching:** LangChain uploads in batches internally.
+
+### Verified results
+
+Running `python main.py` against Azure stored 20 chunks. Querying the index afterwards showed:
+
+- Index `insurance-policies` with the fields `id`, `content`, `content_vector` and `metadata`.
+- Document count: 20.
+- `content_vector` size: 1536 dimensions, matching `text-embedding-3-small`.
+- A sample entry with ID `NH-2026-01-v3-2-p0-c0` and its metadata JSON (source, page, policy type, document version, product ID).
+
+You can check the same things in the Azure portal: the document count, and the vector field with its dimensions.
+
+### Known limitations
+
+- Re-running `main.py` with the same document updates the same entries: after a second run the index still had 20 documents with 20 unique IDs. IDs are built from product, version, page and chunk number, so they only stay stable while the text and chunk settings are unchanged. If an edited page produces fewer chunks than before, the extra old entries stay in the index until the index is rebuilt or they are deleted.
+- Metadata is stored as one field, so it cannot be used for filtering. To filter on `access_level` or `document_version`, the index fields have to be defined explicitly.
+- `langchain-community` prints a deprecation warning saying it is being sunset. It does not affect the pipeline today.
 
 ## Next steps
 
-- Store the chunks, vectors and metadata in a vector store (Azure AI Search, or a local store such as FAISS or Chroma).
-- Build the retrieval and answer chain: retriever, `ChatPromptTemplate`, chat model, `create_retrieval_chain` with `create_stuff_documents_chain`.
+- Delete stale entries when a document is edited and produces fewer chunks (or rebuild the index).
+- Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
+- Add retrieval: search the index with a question, using hybrid search and semantic ranking.
+- Build the answer chain: retriever, `ChatPromptTemplate`, `AzureChatOpenAI`, `create_retrieval_chain` with `create_stuff_documents_chain`.
+- Add a script to rebuild the index when the documents or the embedding model change.
