@@ -16,7 +16,6 @@ A RAG project over PDF insurance policy documents, built with LangChain, Azure O
 | [embeddings.py](embeddings.py) | Creates the Azure OpenAI embedding model |
 | [vector_store.py](vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
 | [retrieval.py](retrieval.py) | Retrieves the chunks most relevant to a question |
-| [answer.py](answer.py) | Sends the question and retrieved chunks to the chat model and returns the answer |
 | [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
 | [.env.example](.env.example) | Template for the settings in `.env` |
 | [requirements.txt](requirements.txt) | Pinned dependencies |
@@ -65,7 +64,6 @@ pip install -r requirements.txt
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Name of your embedding deployment | `text-embedding-3-small` |
 | `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version | `2024-10-21` |
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | Name of your chat model deployment | `gpt-4.1-mini` |
-| `AZURE_OPENAI_CHAT_API_VERSION` | API version for the chat model | same as `AZURE_OPENAI_API_VERSION` |
 | `AZURE_SEARCH_ENDPOINT` | Azure AI Search endpoint | required |
 | `AZURE_SEARCH_KEY` | Azure AI Search admin key | required |
 | `AZURE_SEARCH_INDEX` | Index name | `insurance-policies` |
@@ -111,8 +109,8 @@ Retrieval and generation then run on the stored index:
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 6 | Retrieve relevant chunks | [retrieval.py](retrieval.py) | `get_retriever()` | a retriever returning the 4 chunks most relevant to the question |
-| 7 | Generate the answer | [answer.py](answer.py) | `answer_question()` | the answer plus the chunks it was based on |
+| 6 | Retrieve relevant chunks | [retrieval.py](retrieval.py) | `get_retriever()` | the 4 chunks most relevant to the question |
+| 7 | Generate the answer | [main.py](main.py) | `chain.invoke()` | the answer, with sources |
 
 Each stage is described below in the same order.
 
@@ -223,7 +221,7 @@ You can check the same things in the Azure portal: the document count, and the v
 
 `get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
 
-This stage is used by [answer.py](answer.py), which is what [main.py](main.py) calls. `retrieve(question)` can also be called on its own to look at the raw chunks for a question.
+[main.py](main.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks. `retrieve(question)` in [retrieval.py](retrieval.py) does the same in one call.
 
 ### Search types
 
@@ -248,42 +246,50 @@ This stage is used by [answer.py](answer.py), which is what [main.py](main.py) c
 
 - `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `main.py`) with the configuration defined.
 
-## Stage 7: Generate the answer ([answer.py](answer.py))
+## Stage 7: Generate the answer ([main.py](main.py))
 
 ### How it works
 
-`answer_question()` in [answer.py](answer.py) runs the standard RAG chain from the diagram:
+The answer step is written directly in [main.py](main.py), after retrieval, with no helper functions. It first defines three plain objects:
 
-1. `get_chat_model()` creates `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
-2. A `ChatPromptTemplate` has a system message with the rules and a `{context}` slot, and a human message with the question.
-3. `create_stuff_documents_chain` puts the retrieved chunks into `{context}`. Each chunk is shown to the model as `[source, page N]` followed by its text, so the model can cite pages.
-4. `create_retrieval_chain` ties it together: the retriever from Stage 6 finds the chunks, the chain fills the prompt and calls the model.
+1. `llm`: `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
+2. `prompt`: a `ChatPromptTemplate` with two inputs, `{context}` (the chunks) and `{question}`.
+3. `chain`: `prompt | llm | StrOutputParser()`, which fills the prompt, calls the model and returns the answer as plain text.
 
-It returns the answer and the chunks that were sent, so the answer can be checked against its sources. [main.py](main.py) asks a sample question (the `QUESTION` constant at the top) and prints the answer and the retrieved chunks.
+It then does the steps one by one, so each is easy to follow:
+
+1. Get the retriever and call `retriever.invoke(question)` to get the chunks.
+2. Join the chunk texts into one `context` string. Each chunk is prefixed with `[source, page N]` so the model can cite it.
+3. Call `chain.invoke({"context": context, "question": question})` and print the answer.
+
+The question is the `QUESTION` constant at the top of [main.py](main.py).
 
 ### The system prompt rules
 
-- Answer only from the policy context; if it does not contain the answer, say the policy provided does not cover it. This matters because retrieval always returns 4 chunks, even for questions the policy never mentions.
-- Quote loadings, limits and decisions exactly as written.
-- Cite the source and page for each fact.
+- Answer only from the context.
+- If the answer is not in the context, say "I don't know". This matters because retrieval always returns 4 chunks, even for questions the policy never mentions.
+- Mention the source and page for each fact.
+
+### Page numbers
+
+The context uses `page_label`, the number a reader sees in a PDF viewer (the 13th page is "page 13"). The loader's `page` field is zero-based, so using it would label that page "12".
 
 ### Verified results
 
-- "What underwriting decision applies to a smoker with a BMI of 32?" The answer gave smoker: Accept with Loading +20% and BMI 30 to 34.9: Accept with Loading +15%, said they are added together, and cited pages 5 and 11. These match the policy.
-- "Am I covered for flood damage?" The answer said the policy does not cover flood damage because the exclusions and coverage details do not mention it, instead of inventing an answer.
+- "What underwriting decision applies to a smoker with a BMI of 32?" The answer gave smoker: Accept with Loading +20% and BMI 30 to 34.9: Accept with Loading +15%, added them to a combined 35%, and cited pages 5 and 11. These match the policy.
+- "Am I covered for flood damage?" The answer said the context does not mention flood damage and that it does not know whether it is covered, instead of inventing an answer.
 
 ### Known limitations
 
-- The flood answer cited pages 2 and 8 to 10, which do not mention floods. The citations can point at pages that were merely retrieved, not pages that support the statement.
-- "Does not cover" is slightly stronger than "does not mention". The prompt could ask the model to say "the policy does not mention it".
-- The model never sees the unrelated parts of the policy; it only sees the 4 retrieved chunks, so a question whose answer spans more pages may be answered incompletely. Raising `k` helps at a token cost.
+- The flood answer still listed pages 2, 8, 9 and 10 as sources, which do not mention floods. The cited pages can be ones that were merely retrieved, not ones that support the statement.
+- The model only sees the 4 retrieved chunks, so a question whose answer spans more pages may be answered incompletely. Raising `k` helps at a token cost.
 
 ## Next steps
 
 - Delete stale entries when a document is edited and produces fewer chunks (or rebuild the index).
 - Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
 - Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
-- Tighten the prompt so it says "not mentioned" rather than "not covered" and cites only pages that support a statement.
+- Tighten the prompt so it cites only the pages that support a statement.
 - Let the user type questions (a simple loop or command-line argument) instead of the fixed `QUESTION`.
 - Split `main.py` so indexing and answering can be run separately; indexing does not need to repeat for every question.
 - Add a script to rebuild the index when the documents or the embedding model change.
