@@ -68,9 +68,8 @@ def retrieve_pipeline(question: str):
 
 
 def main():
-    # works from any working directory
-    # PDF_PATH = Path(__file__).parent / "data" / "insurance_policy.pdf"
-    PDF_PATH = Path("data/insurance_policy.pdf")
+    # data/ sits next to main.py, so this works from any working directory
+    PDF_PATH = Path(__file__).parent / "data" / "insurance_policy.pdf"
     index_pipeline(PDF_PATH)
 
     QUESTION = "What underwriting decision applies to a smoker with a BMI of 32?"

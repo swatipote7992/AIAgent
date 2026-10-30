@@ -16,7 +16,9 @@ A RAG project over PDF insurance policy documents, built with LangChain, Azure O
 | [embeddings.py](embeddings.py) | Creates the Azure OpenAI embedding model |
 | [vector_store.py](vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
 | [retrieval.py](retrieval.py) | Retrieves the chunks most relevant to a question |
-| [insurance_policy.pdf](insurance_policy.pdf) | Fictional sample policy used as input |
+| [insurance_policy.pdf](data/insurance_policy.pdf) | Fictional sample policy used as input |
+| [underwriting_rules.pdf](data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Not indexed yet |
+| [claims_handling.pdf](data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Not indexed yet |
 | [.env.example](.env.example) | Template for the settings in `.env` |
 | [requirements.txt](requirements.txt) | Pinned dependencies |
 | [.gitignore](.gitignore) | Keeps `.venv`, `.env` and caches out of git |
@@ -89,7 +91,7 @@ git status --short
 
 ## main.py: the entry point
 
-[main.py](main.py) runs the indexing pipeline and then answers a sample question. It reads [insurance_policy.pdf](insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before answering. Set the project up first (see [Setup](#setup)), then run:
+[main.py](main.py) runs the indexing pipeline and then answers a sample question. It reads [insurance_policy.pdf](data/insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before answering. Set the project up first (see [Setup](#setup)), then run:
 
 ```powershell
 python main.py
@@ -118,7 +120,7 @@ Each stage is described below in the same order.
 
 `load_pdf()` uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
 
-The input is the fictional sample policy [insurance_policy.pdf](insurance_policy.pdf). It has 14 pages and covers:
+The input is the fictional sample policy [insurance_policy.pdf](data/insurance_policy.pdf). It has 14 pages and covers:
 
 - Definitions, scope of cover and the underwriting process (pages 1-4)
 - Underwriting decision matrix by age, BMI and smoking (page 5)
@@ -283,6 +285,30 @@ The context uses `page_label`, the number a reader sees in a PDF viewer (the 13t
 
 - The flood answer still listed pages 2, 8, 9 and 10 as sources, which do not mention floods. The cited pages can be ones that were merely retrieved, not ones that support the statement.
 - The model only sees the 4 retrieved chunks, so a question whose answer spans more pages may be answered incompletely. Raising `k` helps at a token cost.
+
+## More sample documents: underwriting rules and claims
+
+Two separate fictional internal guides sit next to the policy in `data/`. Both are for the same product (`NH-2026-01`, version 3.2) and are consistent with the policy document (same loadings and limits), adding detail the policy does not have.
+
+**[underwriting_rules.pdf](data/underwriting_rules.pdf)** (6 pages: a title page and five sections):
+
+- Authority levels by role, with loading limits.
+- Evidence requirements (age 50 or over, cardiac conditions, diabetes, hypertension, and others).
+- Referral rules, decline reasons, and postponements and exclusions.
+
+**[claims_handling.pdf](data/claims_handling.pdf)** (7 pages: a title page and six sections):
+
+- Pre-authorisation (valid for 90 days) and emergency treatment.
+- Annual limits and excess by benefit.
+- Required documents, and the 6-month time limit.
+- Reasons a claim is declined, fraud checks, and claim appeals.
+
+Example questions: who can approve a +60% loading (underwriting rules), what evidence is needed for diabetes (underwriting rules), and what the excess is on an MRI (claims handling).
+
+They are **not indexed yet**. [main.py](main.py) loads only one PDF, and indexing the others needs changes first:
+
+- Chunk IDs are built from product, version, page and chunk number. All three documents share the product and version, so their entries would overwrite each other. The source file name has to become part of the ID.
+- [metadata.py](metadata.py) applies the same `policy_type`, `document_version`, `product_id` and `access_level` to every page. A document type field (policy, underwriting rules, claims) would let you tell the documents apart and filter by them.
 
 ## Next steps
 
