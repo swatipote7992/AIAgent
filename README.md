@@ -12,7 +12,9 @@ AIAgent/
 ├── .env.example         template for .env
 ├── .gitignore           ignores .env, .venv, caches
 ├── README.md
-├── frontend/            empty for now
+├── frontend/            React + TypeScript + Vite web app
+│   ├── package.json, vite.config.ts, tsconfig.json, index.html
+│   └── src/             main.tsx, App.tsx, api.ts, types.ts, styles.css
 └── backend/
     ├── .venv/           virtual environment (not in git)
     ├── .gitignore
@@ -20,6 +22,7 @@ AIAgent/
     ├── main.py
     ├── load_pdf.py, clean_text.py, metadata.py, chunking.py
     ├── embeddings.py, vector_store.py, retrieval.py
+    ├── api/main.py      FastAPI server used by the frontend
     └── data/            the sample PDFs
 ```
 
@@ -33,6 +36,8 @@ AIAgent/
 | [embeddings.py](backend/embeddings.py) | Creates the Azure OpenAI embedding model |
 | [vector_store.py](backend/vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
 | [retrieval.py](backend/retrieval.py) | Retrieves the chunks most relevant to a question |
+| [api/main.py](backend/api/main.py) | FastAPI server with one endpoint, `POST /api/ask` |
+| [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
 | [insurance_policy.pdf](backend/data/insurance_policy.pdf) | Fictional sample policy used as input |
 | [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Not indexed yet |
 | [claims_handling.pdf](backend/data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Not indexed yet |
@@ -63,7 +68,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 From `backend/` with the virtual environment active:
 
 ```powershell
-pip install langchain langchain-community pypdf langchain-openai azure-search-documents python-dotenv
+pip install langchain langchain-community pypdf langchain-openai azure-search-documents python-dotenv fastapi uvicorn
 pip freeze > requirements.txt
 ```
 
@@ -311,6 +316,65 @@ The context uses `page_label`, the number a reader sees in a PDF viewer (the 13t
 
 - The flood answer still listed pages 2, 8, 9 and 10 as sources, which do not mention floods. The cited pages can be ones that were merely retrieved, not ones that support the statement.
 - The model only sees the 4 retrieved chunks, so a question whose answer spans more pages may be answered incompletely. Raising `k` helps at a token cost.
+
+## Web app: API and frontend
+
+A simple web app on top of the same pipeline. It is deliberately minimal for now: ask a question, read the answer, see which chunks were retrieved. More features can be added later.
+
+### API ([api/main.py](backend/api/main.py))
+
+A FastAPI server with one endpoint:
+
+- `POST /api/ask` with `{"question": "..."}` returns `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
+- It uses the same retriever ([retrieval.py](backend/retrieval.py)), model and prompt as [main.py](backend/main.py). The prompt is written out in both files, so a prompt change has to be made in both.
+- An empty question gets a 422 response, and a failure reaching Azure gets a 502 with the error message.
+- It only answers questions from what is already in the index. It does not index anything; run `main.py` for that.
+
+### Frontend ([frontend/](frontend/))
+
+React with TypeScript, built with Vite, in the dark console theme (design 4 from the mockups). The screen has a chat column on the left and a "Retrieved chunks" panel on the right.
+
+- [src/App.tsx](frontend/src/App.tsx): the page. Example questions on an empty chat, a transcript of questions and answers, and an input box (Enter sends, Shift+Enter adds a line). Click a question to see the chunks that were retrieved for it. Each chunk expands to show its text.
+- [src/api.ts](frontend/src/api.ts): the call to `/api/ask`.
+- [src/types.ts](frontend/src/types.ts): the TypeScript types for the API response.
+- [src/styles.css](frontend/src/styles.css): the dark theme. On narrow screens the chunks panel moves below the chat.
+- [vite.config.ts](frontend/vite.config.ts): in development, Vite forwards `/api` to the FastAPI server on port 8000, so no CORS setup is needed.
+
+### Running it
+
+The index must already be filled (run `python main.py` once, see above). Then start both servers, each in its own terminal.
+
+Terminal 1, the API:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+uvicorn api.main:app --port 8000
+```
+
+Terminal 2, the frontend (the first time, run `npm install`):
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. To check types and make a production build: `npm run build` (output in `frontend/dist/`, ignored by git).
+
+### Verified
+
+- The API returned the right answer and 4 chunks for the smoker and BMI 32 question, and the "I don't know" answer for the flood question.
+- `npm run build` passes the TypeScript check and builds.
+- In a browser, clicking the smoker example showed the answer and the four chunks (pages 11, 5, 4 and 6). I did not test it with the API stopped, so the error message display is untested.
+
+### Not included yet
+
+- Document list, upload and index status.
+- Saved conversation history (the chat resets on reload).
+- Highlighting which chunks the answer actually cited.
+- Streaming the answer as it is written.
+- Login. The API has none, so only run it on your own machine.
 
 ## More sample documents: underwriting rules and claims
 
