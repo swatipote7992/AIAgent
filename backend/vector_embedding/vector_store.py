@@ -3,7 +3,7 @@ import re
 from collections import Counter
 
 from dotenv import load_dotenv
-from embeddings import get_embedding_model
+from vector_embedding.embeddings import get_embedding_model
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from langchain_core.documents import Document
 

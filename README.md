@@ -19,24 +19,31 @@ AIAgent/
     ├── .venv/           virtual environment (not in git)
     ├── .gitignore
     ├── requirements.txt
-    ├── main.py
-    ├── load_pdf.py, clean_text.py, metadata.py, chunking.py
-    ├── embeddings.py, vector_store.py, retrieval.py
-    ├── api/main.py      FastAPI server used by the frontend
+    ├── indexing/        the indexing phase (run when documents change)
+    │   ├── ragindexing.py   entry point: PDF to chunks to index
+    │   └── load_pdf.py, clean_text.py, metadata.py, chunking.py
+    ├── vector_embedding/   shared by indexing and answering
+    │   └── embeddings.py, vector_store.py
+    ├── answering/       the answering phase (runs for every question)
+    │   ├── retrieval.py     finds the chunks relevant to a question
+    │   └── insur_llm.py     builds the prompt and calls the chat model
+    ├── api/
+    │   └── ragapi.py        FastAPI endpoint used by the frontend
     └── data/            the sample PDFs
 ```
 
 | File | Purpose |
 | --- | --- |
-| [main.py](backend/main.py) | Entry point that runs the indexing pipeline, then answers a sample question |
-| [load_pdf.py](backend/load_pdf.py) | Loads the PDF, one document per page |
-| [clean_text.py](backend/clean_text.py) | Cleans the extracted text |
-| [metadata.py](backend/metadata.py) | Adds source, page and policy metadata |
-| [chunking.py](backend/chunking.py) | Splits pages into overlapping chunks |
-| [embeddings.py](backend/embeddings.py) | Creates the Azure OpenAI embedding model |
-| [vector_store.py](backend/vector_store.py) | Embeds the chunks and stores them in Azure AI Search |
-| [retrieval.py](backend/retrieval.py) | Retrieves the chunks most relevant to a question |
-| [api/main.py](backend/api/main.py) | FastAPI server with one endpoint, `POST /api/ask` |
+| [indexing/ragindexing.py](backend/indexing/ragindexing.py) | Entry point of the indexing phase: runs the five indexing stages |
+| [load_pdf.py](backend/indexing/load_pdf.py) | Loads the PDF, one document per page |
+| [clean_text.py](backend/indexing/clean_text.py) | Cleans the extracted text |
+| [metadata.py](backend/indexing/metadata.py) | Adds source, page and policy metadata |
+| [chunking.py](backend/indexing/chunking.py) | Splits pages into overlapping chunks |
+| [embeddings.py](backend/vector_embedding/embeddings.py) | Creates the Azure OpenAI embedding model (used by indexing and by retrieval) |
+| [vector_store.py](backend/vector_embedding/vector_store.py) | Connects to the Azure AI Search index; `store_chunks()` embeds and uploads the chunks (used by indexing and by retrieval) |
+| [retrieval.py](backend/answering/retrieval.py) | Retrieves the chunks most relevant to a question |
+| [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `insur_llm.py` |
+| [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
 | [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
 | [insurance_policy.pdf](backend/data/insurance_policy.pdf) | Fictional sample policy used as input |
 | [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Not indexed yet |
@@ -47,7 +54,7 @@ AIAgent/
 
 ## Setup
 
-Do this once before running `main.py`. The virtual environment and the requirements file live in `backend/`.
+Do this once before running the indexing or the API. The virtual environment and the requirements file live in `backend/`.
 
 ### Create a virtual environment
 
@@ -97,7 +104,7 @@ If the virtual environment was moved from another folder and misbehaves (for exa
 | `AZURE_SEARCH_KEY` | Azure AI Search admin key | required |
 | `AZURE_SEARCH_INDEX` | Index name | `insurance-policies` |
 
-The deployment name, endpoint and API version must match what you created in Azure. If a required setting is missing, `main.py` stops with a "Missing settings in .env" message naming it.
+The deployment name, endpoint and API version must match what you created in Azure. If a required setting is missing, the program stops with a "Missing settings in .env" message naming it.
 
 `OPENAI_API_KEY` appears in [.env.example](.env.example) but nothing in the project uses it any more.
 
@@ -116,38 +123,40 @@ The root `.gitignore` is the one that protects `.env`, because `.env` sits in th
 git status --short
 ```
 
-## main.py: the entry point
+## Indexing: ragindexing.py
 
-[main.py](backend/main.py) runs the indexing pipeline and then answers a sample question. It reads [insurance_policy.pdf](backend/data/insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. It also prints the tenth chunk as a quick check. Because indexing runs every time, each run re-embeds the 20 chunks (a small API cost) before answering. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
+The project has two phases. **Indexing** reads the PDF and fills the Azure AI Search index; run it when the documents change. **Answering** (the API and the frontend, see [Web app](#web-app-api-and-frontend)) reads from that index for every question. They are separate, so asking questions does not re-embed the PDF.
+
+[indexing/ragindexing.py](backend/indexing/ragindexing.py) is the entry point of the indexing phase. It reads [insurance_policy.pdf](backend/data/insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
 
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-python main.py
+python -m indexing.ragindexing
 ```
 
-The modules import each other by plain name (`from chunking import create_chunk`), so `main.py` must be run from inside `backend/`. Running `python -m backend.main` from the project root does not work with these imports. The PDF path is built from the location of `main.py`, so it does not depend on the folder you run from.
+Run it as a module (`-m`) from `backend/`. Running the file directly (`python indexing/ragindexing.py`) fails with "No module named indexing", because the files in `indexing/` import each other as `indexing.x` and the shared files (`vector_store.py`, `embeddings.py`) by plain name. The PDF path is built from the location of the file, so it does not depend on the folder you run from. Each run re-embeds the PDF's chunks (a small API cost) and updates the same entries in the index.
 
 ### Indexing pipeline
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 1 | Load the PDF | [load_pdf.py](backend/load_pdf.py) | `load_pdf()` | one document per page |
-| 2 | Clean the text | [clean_text.py](backend/clean_text.py) | `clean_documents()` | cleaned pages |
-| 3 | Add metadata | [metadata.py](backend/metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
-| 4 | Split into chunks | [chunking.py](backend/chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
-| 5 | Embed and store the chunks | [vector_store.py](backend/vector_store.py) (uses the model from [embeddings.py](backend/embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
+| 1 | Load the PDF | [load_pdf.py](backend/indexing/load_pdf.py) | `load_pdf()` | one document per page |
+| 2 | Clean the text | [clean_text.py](backend/indexing/clean_text.py) | `clean_documents()` | cleaned pages |
+| 3 | Add metadata | [metadata.py](backend/indexing/metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
+| 4 | Split into chunks | [chunking.py](backend/indexing/chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
+| 5 | Embed and store the chunks | [vector_store.py](backend/vector_embedding/vector_store.py) (uses the model from [embeddings.py](backend/vector_embedding/embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
 
-Retrieval and generation then run on the stored index:
+Answering then runs on the stored index, for every question:
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 6 | Retrieve relevant chunks | [retrieval.py](backend/retrieval.py) | `get_retriever()` | the 4 chunks most relevant to the question |
-| 7 | Generate the answer | [main.py](backend/main.py) | `chain.invoke()` | the answer, with sources |
+| 6 | Retrieve relevant chunks | [retrieval.py](backend/answering/retrieval.py), called by [insur_llm.py](backend/answering/insur_llm.py) | `get_retriever()` | the 4 chunks most relevant to the question |
+| 7 | Generate the answer | [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm()` | the answer, with sources |
 
 Each stage is described below in the same order.
 
-## Stage 1: Load the PDF ([load_pdf.py](backend/load_pdf.py))
+## Stage 1: Load the PDF ([load_pdf.py](backend/indexing/load_pdf.py))
 
 `load_pdf()` uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
 
@@ -160,7 +169,7 @@ The input is the fictional sample policy [insurance_policy.pdf](backend/data/ins
 - General exclusions, waiting periods, premiums and loadings, claims (pages 9-12)
 - Appeals and review of underwriting decisions (page 13) and contact details (page 14)
 
-## Stage 2: Clean and prepare the extracted text ([clean_text.py](backend/clean_text.py))
+## Stage 2: Clean and prepare the extracted text ([clean_text.py](backend/indexing/clean_text.py))
 
 Poor extraction produces poor chunks, so pages are cleaned before splitting.
 
@@ -179,7 +188,7 @@ What it deliberately does not touch, so policy accuracy is protected:
 
 Verified: the sample PDF still has 14 pages after cleaning (it has no headers or footers). A synthetic test with fake headers, footers and an empty page removed only those and kept every numbered clause.
 
-## Stage 3: Preserve metadata ([metadata.py](backend/metadata.py))
+## Stage 3: Preserve metadata ([metadata.py](backend/indexing/metadata.py))
 
 Each chunk must keep track of where it came from, so answers can cite the right policy section.
 
@@ -190,9 +199,9 @@ Every page, and therefore every chunk (the splitter copies page metadata onto it
 - `total_pages`.
 - `policy_type`, `document_version`, `product_id` and `access_level` (the extra fields; `access_level` can later be used as a search filter for permissions).
 
-The default values for the sample policy are set at the top of [metadata.py](backend/metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
+The default values for the sample policy are set at the top of [metadata.py](backend/indexing/metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
 
-## Stage 4: Split the pages into chunks ([chunking.py](backend/chunking.py))
+## Stage 4: Split the pages into chunks ([chunking.py](backend/indexing/chunking.py))
 
 `create_chunk()` uses LangChain's `RecursiveCharacterTextSplitter`.
 
@@ -201,15 +210,15 @@ The default values for the sample policy are set at the top of [metadata.py](bac
 - **Splitting order:** the splitter tries paragraph breaks first, then line breaks, then spaces, so chunks tend to end at natural boundaries.
 - **Metadata:** every chunk keeps its page's metadata.
 
-The two values are constants at the top of [chunking.py](backend/chunking.py) and can be tuned.
+The two values are constants at the top of [chunking.py](backend/indexing/chunking.py) and can be tuned.
 
 Verified: 14 cleaned pages are split into 20 chunks, none longer than 500 characters, and every chunk has its metadata.
 
-## Stage 5: Embed and store the chunks ([vector_store.py](backend/vector_store.py), [embeddings.py](backend/embeddings.py))
+## Stage 5: Embed and store the chunks ([vector_store.py](backend/vector_embedding/vector_store.py), [embeddings.py](backend/vector_embedding/embeddings.py))
 
 ### How it works
 
-`get_embedding_model()` in [embeddings.py](backend/embeddings.py) creates the Azure OpenAI embedding model from the `.env` settings. `store_chunks()` in [vector_store.py](backend/vector_store.py) creates an `AzureSearch` vector store pointing at the Azure AI Search index and calls `add_documents()`. LangChain embeds each chunk and uploads its text, vector and metadata, so there is no separate embedding step in `main.py`.
+`get_embedding_model()` in [embeddings.py](backend/vector_embedding/embeddings.py) creates the Azure OpenAI embedding model from the `.env` settings. `store_chunks()` in [vector_store.py](backend/vector_embedding/vector_store.py) creates an `AzureSearch` vector store pointing at the Azure AI Search index and calls `add_documents()`. LangChain embeds each chunk and uploads its text, vector and metadata, so there is no separate embedding step in `ragindexing.py`.
 
 Background on embeddings:
 
@@ -233,7 +242,7 @@ Background on embeddings:
 
 ### Verified results
 
-Running `python main.py` (from `backend/`) against Azure stored 20 chunks. Querying the index afterwards showed:
+Running `python -m indexing.ragindexing` (from `backend/`) against Azure stored 20 chunks. Querying the index afterwards showed:
 
 - Index `insurance-policies` with the fields `id`, `content`, `content_vector` and `metadata`.
 - Document count: 20.
@@ -244,17 +253,17 @@ You can check the same things in the Azure portal: the document count, and the v
 
 ### Known limitations
 
-- Re-running `main.py` with the same document updates the same entries: after a second run the index still had 20 documents with 20 unique IDs. IDs are built from product, version, page and chunk number, so they only stay stable while the text and chunk settings are unchanged. If an edited page produces fewer chunks than before, the extra old entries stay in the index until the index is rebuilt or they are deleted.
+- Re-running the indexing with the same document updates the same entries: after a second run the index still had 20 documents with 20 unique IDs. IDs are built from product, version, page and chunk number, so they only stay stable while the text and chunk settings are unchanged. If an edited page produces fewer chunks than before, the extra old entries stay in the index until the index is rebuilt or they are deleted.
 - Metadata is stored as one field, so it cannot be used for filtering. To filter on `access_level` or `document_version`, the index fields have to be defined explicitly.
 - `langchain-community` prints a deprecation warning saying it is being sunset. It does not affect the pipeline today.
 
-## Stage 6: Retrieve relevant chunks ([retrieval.py](backend/retrieval.py))
+## Stage 6: Retrieve relevant chunks ([retrieval.py](backend/answering/retrieval.py))
 
 ### How it works
 
-`get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](backend/vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
+`get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](backend/vector_embedding/vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
 
-[main.py](backend/main.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks. `retrieve(question)` in [retrieval.py](backend/retrieval.py) does the same in one call.
+[insur_llm.py](backend/answering/insur_llm.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks. `retrieve(question)` in [retrieval.py](backend/answering/retrieval.py) does the same in one call.
 
 ### Search types
 
@@ -277,25 +286,23 @@ You can check the same things in the Azure portal: the document count, and the v
 
 ### Known limitations
 
-- `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `main.py`) with the configuration defined.
+- `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `python -m indexing.ragindexing`) with the configuration defined.
 
-## Stage 7: Generate the answer ([main.py](backend/main.py))
+## Stage 7: Generate the answer ([insur_llm.py](backend/answering/insur_llm.py))
 
 ### How it works
 
-The answer step is written directly in [main.py](backend/main.py), after retrieval, with no helper functions. It first defines three plain objects:
+[insur_llm.py](backend/answering/insur_llm.py) answers one question in `ask_llm(question)`. It is called by the API for every request. It builds three plain objects once and reuses them:
 
 1. `llm`: `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
 2. `prompt`: a `ChatPromptTemplate` with two inputs, `{context}` (the chunks) and `{question}`.
 3. `chain`: `prompt | llm | StrOutputParser()`, which fills the prompt, calls the model and returns the answer as plain text.
 
-It then does the steps one by one, so each is easy to follow:
+Then, for each question, it does the steps one by one:
 
 1. Get the retriever and call `retriever.invoke(question)` to get the chunks.
 2. Join the chunk texts into one `context` string. Each chunk is prefixed with `[source, page N]` so the model can cite it.
-3. Call `chain.invoke({"context": context, "question": question})` and print the answer.
-
-The question is the `QUESTION` constant at the top of [main.py](backend/main.py).
+3. Call `chain.invoke({"context": context, "question": question})` and return the answer together with the chunks.
 
 ### The system prompt rules
 
@@ -321,14 +328,16 @@ The context uses `page_label`, the number a reader sees in a PDF viewer (the 13t
 
 A simple web app on top of the same pipeline. It is deliberately minimal for now: ask a question, read the answer, see which chunks were retrieved. More features can be added later.
 
-### API ([api/main.py](backend/api/main.py))
+### API ([api/ragapi.py](backend/api/ragapi.py) and [insur_llm.py](backend/answering/insur_llm.py))
 
-A FastAPI server with one endpoint:
+The API is split in two files:
 
-- `POST /api/ask` with `{"question": "..."}` returns `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
-- It uses the same retriever ([retrieval.py](backend/retrieval.py)), model and prompt as [main.py](backend/main.py). The prompt is written out in both files, so a prompt change has to be made in both.
-- An empty question gets a 422 response, and a failure reaching Azure gets a 502 with the error message.
-- It only answers questions from what is already in the index. It does not index anything; run `main.py` for that.
+- [api/ragapi.py](backend/api/ragapi.py) is the web layer. It defines one endpoint, `POST /api/ask`, checks the request (`{"question": "..."}`, 1 to 1000 characters) and passes the question to `ask_llm()`. An empty question gets a 422 response, and any failure while answering (for example Azure not reachable) gets a 502 with the error message.
+- [insur_llm.py](backend/answering/insur_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/answering/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
+
+The response is `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
+
+The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
 
 ### Frontend ([frontend/](frontend/))
 
@@ -342,14 +351,14 @@ React with TypeScript, built with Vite, in the dark console theme (design 4 from
 
 ### Running it
 
-The index must already be filled (run `python main.py` once, see above). Then start both servers, each in its own terminal.
+The index must already be filled (run `python -m indexing.ragindexing` once, see above). Then start both servers, each in its own terminal.
 
 Terminal 1, the API:
 
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
-uvicorn api.main:app --port 8000
+uvicorn api.ragapi:app --port 8000
 ```
 
 Terminal 2, the frontend (the first time, run `npm install`):
@@ -395,10 +404,10 @@ Two separate fictional internal guides sit next to the policy in `data/`. Both a
 
 Example questions: who can approve a +60% loading (underwriting rules), what evidence is needed for diabetes (underwriting rules), and what the excess is on an MRI (claims handling).
 
-They are **not indexed yet**. [main.py](backend/main.py) loads only one PDF, and indexing the others needs changes first:
+They are **not indexed yet**. [ragindexing.py](backend/indexing/ragindexing.py) loads only one PDF, and indexing the others needs changes first:
 
 - Chunk IDs are built from product, version, page and chunk number. All three documents share the product and version, so their entries would overwrite each other. The source file name has to become part of the ID.
-- [metadata.py](backend/metadata.py) applies the same `policy_type`, `document_version`, `product_id` and `access_level` to every page. A document type field (policy, underwriting rules, claims) would let you tell the documents apart and filter by them.
+- [metadata.py](backend/indexing/metadata.py) applies the same `policy_type`, `document_version`, `product_id` and `access_level` to every page. A document type field (policy, underwriting rules, claims) would let you tell the documents apart and filter by them.
 
 ## Next steps
 
@@ -407,5 +416,4 @@ They are **not indexed yet**. [main.py](backend/main.py) loads only one PDF, and
 - Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
 - Tighten the prompt so it cites only the pages that support a statement.
 - Let the user type questions (a simple loop or command-line argument) instead of the fixed `QUESTION`.
-- Split `main.py` so indexing and answering can be run separately; indexing does not need to repeat for every question.
 - Add a script to rebuild the index when the documents or the embedding model change.

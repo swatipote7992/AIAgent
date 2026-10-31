@@ -1,5 +1,5 @@
 from langchain_core.documents import Document
-from vector_store import create_vector_store
+from vector_embedding.vector_store import create_vector_store
 
 DEFAULT_K = 4  # keep small (3 to 5): extra chunks add noise and cost tokens
 DEFAULT_SEARCH_TYPE = "hybrid"  # "similarity", "hybrid" or "semantic_hybrid"
