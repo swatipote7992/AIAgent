@@ -2,7 +2,7 @@
 
 A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI (`text-embedding-3-small` for embeddings, `gpt-4.1-mini` for answers) and Azure AI Search, managed with **pip** and `backend/requirements.txt`. The code lives in `backend/`. Commands are for Windows PowerShell; each block says which folder to run it from.
 
-**Status:** the whole RAG flow works end to end. The sample policy is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index. A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with page citations.
+**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations.
 
 ## Project layout
 
@@ -46,8 +46,8 @@ AIAgent/
 | [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
 | [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
 | [insurance_policy.pdf](backend/data/insurance_policy.pdf) | Fictional sample policy used as input |
-| [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Not indexed yet |
-| [claims_handling.pdf](backend/data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Not indexed yet |
+| [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Indexed |
+| [claims_handling.pdf](backend/data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Indexed |
 | [.env.example](.env.example) | Template for the settings in `.env` (project root) |
 | [requirements.txt](backend/requirements.txt) | Pinned dependencies |
 | [.gitignore](.gitignore), [backend/.gitignore](backend/.gitignore) | Keep `.venv`, `.env` and caches out of git |
@@ -127,7 +127,7 @@ git status --short
 
 The project has two phases. **Indexing** reads the PDF and fills the Azure AI Search index; run it when the documents change. **Answering** (the API and the frontend, see [Web app](#web-app-api-and-frontend)) reads from that index for every question. They are separate, so asking questions does not re-embed the PDF.
 
-[indexing/ragindexing.py](backend/indexing/ragindexing.py) is the entry point of the indexing phase. It reads [insurance_policy.pdf](backend/data/insurance_policy.pdf), passes the result of each stage to the next, and prints a short summary after every stage. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
+[indexing/ragindexing.py](backend/indexing/ragindexing.py) is the entry point of the indexing phase. It indexes every PDF in `backend/data/` ([insurance_policy.pdf](backend/data/insurance_policy.pdf), [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) and [claims_handling.pdf](backend/data/claims_handling.pdf)), one after the other, passes the result of each stage to the next, and prints a short summary after every stage. To add a document, put a PDF in `backend/data/` and run it again. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
 
 ```powershell
 cd backend
@@ -197,22 +197,25 @@ Every page, and therefore every chunk (the splitter copies page metadata onto it
 - `source`: the file name only, for example `insurance_policy.pdf` (not the local path).
 - `page`: zero-based page index from the loader, and `page_label`: the human page number.
 - `total_pages`.
+- `document_type`: the file name without `.pdf` (`insurance_policy`, `underwriting_rules` or `claims_handling`), so each chunk records which kind of document it is from.
 - `policy_type`, `document_version`, `product_id` and `access_level` (the extra fields; `access_level` can later be used as a search filter for permissions).
 
-The default values for the sample policy are set at the top of [metadata.py](backend/indexing/metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
+The default values for all three sample documents (they are for the same product and version) are set at the top of [metadata.py](backend/indexing/metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
 
 ## Stage 4: Split the pages into chunks ([chunking.py](backend/indexing/chunking.py))
 
 `create_chunk()` uses LangChain's `RecursiveCharacterTextSplitter`.
 
-- **Chunk size:** 500 characters.
-- **Overlap:** 50 characters, so a clause cut at a chunk boundary still appears with its surrounding context in the next chunk.
+- **Chunk size:** 1000 characters. The sample pages are 500 to 900 characters, so each page becomes one chunk and a table is never cut in half.
+- **Overlap:** 100 characters, so a clause cut at a chunk boundary still appears with its surrounding context in the next chunk.
 - **Splitting order:** the splitter tries paragraph breaks first, then line breaks, then spaces, so chunks tend to end at natural boundaries.
 - **Metadata:** every chunk keeps its page's metadata.
 
 The two values are constants at the top of [chunking.py](backend/indexing/chunking.py) and can be tuned.
 
-Verified: 14 cleaned pages are split into 20 chunks, none longer than 500 characters, and every chunk has its metadata.
+Verified: the 27 pages of the three documents (14 + 6 + 7) become 27 chunks, the longest 875 characters, and every chunk has its metadata.
+
+Why 1000 and not 500: with 500 characters the authority table in `underwriting_rules.pdf` was split between two chunks, with the "Senior underwriter" row label at the end of one and its values at the start of the next. Search returned only the second chunk, and the question "Who can approve a total loading of +60%?" got a hedging answer. With one chunk per page the same question is answered correctly (a senior underwriter, page 2). Longer pages than these would still be split, so check the chunk size again if you add documents with long pages or large tables.
 
 ## Stage 5: Embed and store the chunks ([vector_store.py](backend/vector_embedding/vector_store.py), [embeddings.py](backend/vector_embedding/embeddings.py))
 
@@ -236,24 +239,25 @@ Background on embeddings:
 
 ### Design choices
 
-- **Stable IDs:** each chunk gets an ID built from product, version, page and chunk number (for example `NH-2026-01-v3-2-p0-c0`). Running again updates the same entries instead of creating duplicates (verified, see Known limitations).
+- **Stable IDs:** each chunk gets an ID built from product, file name, version, page and chunk number (for example `NH-2026-01-insurance_policy-v3-2-p0-c0`). The file name is part of the ID so documents of the same product and version do not overwrite each other.
+- **Replacing a file's entries:** before a file's chunks are uploaded, its existing entries in the index are deleted. Running again replaces them instead of adding duplicates, and an edited file that now produces fewer chunks leaves no stale entries behind. The delete matches the stored source name exactly before removing anything.
 - **Index creation:** if the index does not exist, LangChain creates it using the embedding size. The index vector size must match the embedding model, so if you change the model, delete the index (or use a new index name) and re-embed everything.
 - **Batching:** LangChain uploads in batches internally.
 
 ### Verified results
 
-Running `python -m indexing.ragindexing` (from `backend/`) against Azure stored 20 chunks. Querying the index afterwards showed:
+Running `python -m indexing.ragindexing` (from `backend/`) against Azure stored 27 chunks (7 from the claims guide, 14 from the policy, 6 from the underwriting guide). Querying the index afterwards showed:
 
 - Index `insurance-policies` with the fields `id`, `content`, `content_vector` and `metadata`.
-- Document count: 20.
+- Document count: 27, all IDs unique, none left over from the earlier single-document index.
 - `content_vector` size: 1536 dimensions, matching `text-embedding-3-small`.
-- A sample entry with ID `NH-2026-01-v3-2-p0-c0` and its metadata JSON (source, page, policy type, document version, product ID).
+- A sample entry with ID `NH-2026-01-insurance_policy-v3-2-p0-c0` and its metadata JSON (source, document type, page, policy type, document version, product ID).
 
 You can check the same things in the Azure portal: the document count, and the vector field with its dimensions.
 
 ### Known limitations
 
-- Re-running the indexing with the same document updates the same entries: after a second run the index still had 20 documents with 20 unique IDs. IDs are built from product, version, page and chunk number, so they only stay stable while the text and chunk settings are unchanged. If an edited page produces fewer chunks than before, the extra old entries stay in the index until the index is rebuilt or they are deleted.
+- Re-running the indexing replaces each file's entries (old ones are deleted, new ones uploaded). Only the PDFs that are currently in `backend/data/` are touched, so deleting a PDF from that folder does not remove its entries from the index.
 - Metadata is stored as one field, so it cannot be used for filtering. To filter on `access_level` or `document_version`, the index fields have to be defined explicitly.
 - `langchain-community` prints a deprecation warning saying it is being sunset. It does not affect the pipeline today.
 
@@ -404,16 +408,21 @@ Two separate fictional internal guides sit next to the policy in `data/`. Both a
 
 Example questions: who can approve a +60% loading (underwriting rules), what evidence is needed for diabetes (underwriting rules), and what the excess is on an MRI (claims handling).
 
-They are **not indexed yet**. [ragindexing.py](backend/indexing/ragindexing.py) loads only one PDF, and indexing the others needs changes first:
+Both are **indexed** together with the policy by `python -m indexing.ragindexing`. Because they share the product and version with the policy, two things were added so the documents do not collide: the file name is part of every chunk ID, and every chunk has a `document_type` field (see Stage 3 and Stage 5).
 
-- Chunk IDs are built from product, version, page and chunk number. All three documents share the product and version, so their entries would overwrite each other. The source file name has to become part of the ID.
-- [metadata.py](backend/indexing/metadata.py) applies the same `policy_type`, `document_version`, `product_id` and `access_level` to every page. A document type field (policy, underwriting rules, claims) would let you tell the documents apart and filter by them.
+Verified answers (each cites the right document and page):
+
+- "Who can approve a total loading of +60%?" A senior underwriter, up to +75% (underwriting rules, page 2).
+- "What is the excess on an MRI scan?" GBP 50 per scan (claims handling, page 3).
+- "What evidence is needed for type 2 diabetes?" The latest HbA1c result and a GP report, within 21 days (underwriting rules, page 3).
+- "What is the waiting period for inpatient treatment?" 14 days (policy, page 10).
+- "Am I covered for flood damage?" "I don't know": none of the three documents mentions floods.
 
 ## Next steps
 
-- Delete stale entries when a document is edited and produces fewer chunks (or rebuild the index).
+- Remove the index entries of a PDF that is deleted from `backend/data/`.
+- Use `document_type` to search only one kind of document (needs explicit index fields, see below).
 - Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
 - Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
 - Tighten the prompt so it cites only the pages that support a statement.
-- Let the user type questions (a simple loop or command-line argument) instead of the fixed `QUESTION`.
 - Add a script to rebuild the index when the documents or the embedding model change.

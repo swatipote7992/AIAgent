@@ -13,13 +13,17 @@ DEFAULT_POLICY_INFO = {
 KEPT_LOADER_FIELDS = ("page", "page_label", "total_pages")  # drops noisy PDF fields such as producer
 
 
-def enrich_metadata(documents: list[Document], policy_info: dict | None = None) -> list[Document]:
-    """Give every page a small, consistent metadata set. The text splitter copies it to each chunk."""
+def enrich_metadata(documents: list[Document], document_type: str, policy_info: dict | None = None) -> list[Document]:
+    """Give every page a small, consistent metadata set. The text splitter copies it to each chunk.
+
+    document_type says which kind of document the page is from, for example "insurance_policy".
+    """
     policy_info = policy_info or DEFAULT_POLICY_INFO
     enriched = []
     for doc in documents:
         metadata = {k: doc.metadata[k] for k in KEPT_LOADER_FIELDS if k in doc.metadata}
         metadata["source"] = Path(doc.metadata["source"]).name  # filename only, not the local path
+        metadata["document_type"] = document_type
         metadata.update(policy_info)
         enriched.append(Document(page_content=doc.page_content, metadata=metadata))
     return enriched

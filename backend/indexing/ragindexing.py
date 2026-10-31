@@ -6,10 +6,12 @@ from indexing.load_pdf import load_pdf
 from indexing.metadata import enrich_metadata
 from vector_embedding.vector_store import store_chunks
 
-PDF_PATH = Path(__file__).resolve().parent.parent / "data" / "insurance_policy.pdf"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def index_pipeline(pdf_path: Path):
+    print(f"=== {pdf_path.name}")
+
     # Load the PDF and split it into pages
     documents = load_pdf(pdf_path)
     print(f"Loaded {len(documents)} pages")
@@ -18,8 +20,8 @@ def index_pipeline(pdf_path: Path):
     documents = clean_documents(documents)
     print(f"{len(documents)} pages after cleaning")
 
-    # Enrich the metadata of each page
-    documents = enrich_metadata(documents)
+    # Enrich the metadata of each page (the file name without .pdf is the document type)
+    documents = enrich_metadata(documents, document_type=pdf_path.stem)
     print(f"Metadata added to {len(documents)} pages")
 
     # Split the pages into smaller overlapping chunks
@@ -32,4 +34,6 @@ def index_pipeline(pdf_path: Path):
 
 
 if __name__ == "__main__":
-    index_pipeline(PDF_PATH)
+    # Index every PDF in the data folder
+    for pdf_path in sorted(DATA_DIR.glob("*.pdf")):
+        index_pipeline(pdf_path)
