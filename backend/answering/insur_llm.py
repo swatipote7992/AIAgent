@@ -11,27 +11,6 @@ load_dotenv(override=True)  # .env wins over variables already set in the shell
 
 
 @lru_cache
-def get_chain():
-    """Chat model and prompt, built once and reused for every question."""
-    llm = AzureChatOpenAI(
-        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-        temperature=0,
-    )
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", (
-            "Answer only from the context below. "
-            "If the answer is not in the context, say you don't know. "
-            "Mention the source and page for each fact.\n\nContext:\n{context}"
-        )),
-        ("human", "{question}"),
-    ])
-    return prompt | llm | StrOutputParser()
-
-
-@lru_cache
 def get_cached_retriever():
     return get_retriever()
 
@@ -46,7 +25,25 @@ def ask_llm(question: str) -> dict:
         for c in chunks
     )
 
-    answer = get_chain().invoke({"context": context, "question": question})
+    """Chat model and prompt, built once and reused for every question."""
+    llm = AzureChatOpenAI(
+        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+        temperature=0,
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "Answer only from the context below. "
+            "If the answer is not in the context, say you don't know. "
+            "Mention the source and page for each fact.\n\nContext:\n{context}"
+        )),
+        ("human", "{question}"),
+    ])
+    chain = prompt | llm | StrOutputParser()
+    answer = chain.invoke({"context": context, "question": question})
 
     return {
         "answer": answer,
