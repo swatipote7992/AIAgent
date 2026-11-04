@@ -1,0 +1,263 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e1116;
+  --panel: #12161c;
+  --card: #151a21;
+  --border: #262d38;
+  --text: #e6edf3;
+  --muted: #9aa7b4;
+  --green: #3fb950;
+  --green-dim: #2f6f3f;
+  --red: #f85149;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+button,
+textarea {
+  font-family: inherit;
+}
+
+.sr-only {
+  position: absolute;
+  left: -9999px;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+/* chat column */
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+  gap: 20px;
+}
+
+.brand {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--green);
+}
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.empty {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.examples {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.example {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.example:hover,
+.example:focus-visible {
+  border-color: var(--green-dim);
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.question {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.turn.selected .question {
+  color: var(--text);
+}
+
+.prompt {
+  color: var(--green);
+  font-family: var(--mono);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.card.error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.status {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* input */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid #333c4a;
+  border-radius: 10px;
+  padding: 10px 10px 10px 16px;
+}
+
+.composer textarea {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 6px 0;
+}
+
+.composer .prompt {
+  padding: 6px 0;
+}
+
+.composer button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--green);
+  color: #04210b;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer:focus-within {
+  border-color: var(--green-dim);
+}
+
+/* retrieval inspector */
+.inspector {
+  width: 360px;
+  flex: none;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  padding: 24px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inspector h2 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.chunk {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.chunk summary {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chunk .meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--green);
+}
+
+.chunk pre {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.5;
+  color: #c9d4df;
+}
+
+@media (max-width: 900px) {
+  .app {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .chat {
+    padding: 16px;
+  }
+
+  .inspector {
+    width: auto;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}
