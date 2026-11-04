@@ -2,25 +2,30 @@ import os
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
-from pydantic import BaseModel, Field
-from retrieval import get_retriever
+from answering.retrieval import get_retriever
 
 load_dotenv(override=True)  # .env wins over variables already set in the shell
 
-app = FastAPI(title="Policy RAG API")
-
-
-class AskRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=1000)
-
 
 @lru_cache
-def get_chain():
-    """Same model and prompt as main.py, built once and reused for every question."""
+def get_cached_retriever():
+    return get_retriever()
+
+
+def ask_llm(question: str) -> dict:
+    """Retrieve the chunks relevant to the question and let the chat model answer from them."""
+    chunks = get_cached_retriever().invoke(question)
+
+    # Join the chunk texts into one context string, keeping source and page for citations
+    context = "\n\n".join(
+        f"[{c.metadata.get('source')}, page {c.metadata.get('page_label')}]\n{c.page_content}"
+        for c in chunks
+    )
+
+    """Chat model and prompt, built once and reused for every question."""
     llm = AzureChatOpenAI(
         azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
@@ -28,6 +33,7 @@ def get_chain():
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         temperature=0,
     )
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
             "Answer only from the context below. "
@@ -36,26 +42,8 @@ def get_chain():
         )),
         ("human", "{question}"),
     ])
-    return prompt | llm | StrOutputParser()
-
-
-@lru_cache
-def get_cached_retriever():
-    return get_retriever()
-
-
-@app.post("/api/ask")
-def ask(request: AskRequest):
-    question = request.question.strip()
-    try:
-        chunks = get_cached_retriever().invoke(question)
-        context = "\n\n".join(
-            f"[{c.metadata.get('source')}, page {c.metadata.get('page_label')}]\n{c.page_content}"
-            for c in chunks
-        )
-        answer = get_chain().invoke({"context": context, "question": question})
-    except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Could not answer the question: {error}")
+    chain = prompt | llm | StrOutputParser()
+    answer = chain.invoke({"context": context, "question": question})
 
     return {
         "answer": answer,
