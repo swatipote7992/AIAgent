@@ -5,7 +5,7 @@ $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"   # the az build log has 
 
 $rg       = "insu_rag_rg"
 $location = "uksouth"
-$swaLoc   = "westeurope"          # Static Web Apps is not offered in UK South
+$swaLoc   = "eastus2"             # Static Web Apps is not offered in UK South, and West Europe refuses new customers
 $acr      = "insurragacr"         # container registry: letters and digits only, globally unique
 $env_     = "insur-rag-env"       # Container Apps environment
 $api      = "insur-rag-api"       # the backend container app
