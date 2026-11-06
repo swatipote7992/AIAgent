@@ -2,7 +2,7 @@
 
 A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI (`text-embedding-3-small` for embeddings, `gpt-4.1-mini` for answers) and Azure AI Search, managed with **pip** and `backend/requirements.txt`. The code lives in `backend/`. Commands are for Windows PowerShell; each block says which folder to run it from.
 
-**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations.
+**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations. The app is also deployed to Azure (see "Deploying to Azure" below); signing in and asking a question on the deployed site has not been confirmed yet.
 
 ## Project layout
 
@@ -12,13 +12,16 @@ AIAgent/
 ├── .env.example         template for .env
 ├── .gitignore           ignores .env, .venv, caches
 ├── README.md
+├── deploy.ps1           deploys everything to Azure (see "Deploying to Azure")
 ├── frontend/            React + TypeScript + Vite web app
 │   ├── package.json, vite.config.ts, tsconfig.json, index.html
+│   ├── public/          staticwebapp.config.json (sign-in rule for Azure)
 │   └── src/             main.tsx, App.tsx, api.ts, types.ts, styles.css
 └── backend/
     ├── .venv/           virtual environment (not in git)
     ├── .gitignore
     ├── requirements.txt
+    ├── Dockerfile       builds the backend image (used by deploy.ps1)
     ├── indexing/        the indexing phase (run when documents change)
     │   ├── ragindexing.py   entry point: PDF to chunks to index
     │   └── load_pdf.py, clean_text.py, metadata.py, chunking.py
@@ -48,6 +51,9 @@ AIAgent/
 | [insurance_policy.pdf](backend/data/insurance_policy.pdf) | Fictional sample policy used as input |
 | [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Indexed |
 | [claims_handling.pdf](backend/data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Indexed |
+| [deploy.ps1](deploy.ps1) | Deploys the backend (Azure Container Apps) and the frontend (Azure Static Web Apps) |
+| [backend/Dockerfile](backend/Dockerfile) | Builds the backend container image |
+| [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Makes the deployed frontend require sign-in, invited users only |
 | [.env.example](.env.example) | Template for the settings in `.env` (project root) |
 | [requirements.txt](backend/requirements.txt) | Pinned dependencies |
 | [.gitignore](.gitignore), [backend/.gitignore](backend/.gitignore) | Keep `.venv`, `.env` and caches out of git |
@@ -160,14 +166,13 @@ Each stage is described below in the same order.
 
 `load_pdf()` uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
 
-The input is the fictional sample policy [insurance_policy.pdf](backend/data/insurance_policy.pdf). It has 14 pages and covers:
+The input is any PDF placed in `backend/data/`, for example a policy, an underwriting guide or a claims guide. Each is loaded the same way. A document of this kind typically has:
 
-- Definitions, scope of cover and the underwriting process (pages 1-4)
-- Underwriting decision matrix by age, BMI and smoking (page 5)
-- Outcomes for medical conditions such as hypertension, diabetes, asthma and cancer (page 6)
-- Mental health, occupation and lifestyle underwriting (pages 7-8)
-- General exclusions, waiting periods, premiums and loadings, claims (pages 9-12)
-- Appeals and review of underwriting decisions (page 13) and contact details (page 14)
+- A title page and definitions.
+- Sections on the rules that apply, such as what is covered, what is excluded and who can approve what.
+- Tables, such as limits, loadings or decision matrices.
+- Procedures, such as how to make a claim or appeal a decision.
+- Contact details at the end.
 
 ## Stage 2: Clean and prepare the extracted text ([clean_text.py](backend/indexing/clean_text.py))
 
@@ -339,6 +344,11 @@ The API is split in two files:
 - [api/ragapi.py](backend/api/ragapi.py) is the web layer. It defines one endpoint, `POST /api/ask`, checks the request (`{"question": "..."}`, 1 to 1000 characters) and passes the question to `ask_llm()`. An empty question gets a 422 response, and any failure while answering (for example Azure not reachable) gets a 502 with the error message.
 - [insur_llm.py](backend/answering/insur_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/answering/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
 
+Two protections were added for the deployed version:
+
+- **CORS.** The frontend and the backend are on different addresses, so [ragapi.py](backend/api/ragapi.py) allows calls only from the frontend addresses listed in the `CORS_ORIGINS` setting (default `http://localhost:5173`), POST only.
+- **API key.** `POST /api/ask` needs an `X-API-Key` header equal to the `API_KEY` setting. If `API_KEY` is not set (local development) the check is skipped. Without or with a wrong key the answer is 401.
+
 The response is `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
 
 The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
@@ -348,7 +358,7 @@ The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API
 React with TypeScript, built with Vite, in the dark console theme (design 4 from the mockups). The screen has a chat column on the left and a "Retrieved chunks" panel on the right.
 
 - [src/App.tsx](frontend/src/App.tsx): the page. Example questions on an empty chat, a transcript of questions and answers, and an input box (Enter sends, Shift+Enter adds a line). Click a question to see the chunks that were retrieved for it. Each chunk expands to show its text.
-- [src/api.ts](frontend/src/api.ts): the call to `/api/ask`.
+- [src/api.ts](frontend/src/api.ts): the call to `/api/ask`. When deployed it calls the backend address in `VITE_API_URL` and sends the key in `VITE_API_KEY`; both are empty in development.
 - [src/types.ts](frontend/src/types.ts): the TypeScript types for the API response.
 - [src/styles.css](frontend/src/styles.css): the dark theme. On narrow screens the chunks panel moves below the chat.
 - [vite.config.ts](frontend/vite.config.ts): in development, Vite forwards `/api` to the FastAPI server on port 8000, so no CORS setup is needed.
@@ -387,42 +397,77 @@ Open http://localhost:5173. To check types and make a production build: `npm run
 - Saved conversation history (the chat resets on reload).
 - Highlighting which chunks the answer actually cited.
 - Streaming the answer as it is written.
-- Login. The API has none, so only run it on your own machine.
+- Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is protected by the frontend sign-in plus the shared API key (see "Deploying to Azure").
 
-## More sample documents: underwriting rules and claims
+## Deploying to Azure
 
-Two separate fictional internal guides sit next to the policy in `data/`. Both are for the same product (`NH-2026-01`, version 3.2) and are consistent with the policy document (same loadings and limits), adding detail the policy does not have.
+The app runs as two parts in the resource group `insu_rag_rg`. The same group already holds the Azure OpenAI and AI Search resources.
 
-**[underwriting_rules.pdf](backend/data/underwriting_rules.pdf)** (6 pages: a title page and five sections):
+| Part | Service | Name | Region |
+| --- | --- | --- | --- |
+| Backend (FastAPI, built from [backend/Dockerfile](backend/Dockerfile)) | Azure Container Apps | `insur-rag-api` | UK South |
+| Image storage | Azure Container Registry (Basic) | `insurragacr` | UK South |
+| Frontend (React build) | Azure Static Web Apps (Free) | `insur-rag-web` | East US 2 |
 
-- Authority levels by role, with loading limits.
-- Evidence requirements (age 50 or over, cardiac conditions, diabetes, hypertension, and others).
-- Referral rules, decline reasons, and postponements and exclusions.
+Live addresses:
 
-**[claims_handling.pdf](backend/data/claims_handling.pdf)** (7 pages: a title page and six sections):
+- Frontend: https://white-dune-05b8e1a0f.8.azurestaticapps.net
+- Backend: https://insur-rag-api.ashyhill-483ba230.uksouth.azurecontainerapps.io/docs
 
-- Pre-authorisation (valid for 90 days) and emergency treatment.
-- Annual limits and excess by benefit.
-- Required documents, and the 6-month time limit.
-- Reasons a claim is declined, fraud checks, and claim appeals.
+### Decisions
 
-Example questions: who can approve a +60% loading (underwriting rules), what evidence is needed for diabetes (underwriting rules), and what the excess is on an MRI (claims handling).
+- **Two hosts with CORS** instead of one container serving both. I first built a version where FastAPI served the built frontend (one container, no CORS). Direction changed to two hosts, so the static-file code was removed from [ragapi.py](backend/api/ragapi.py) and CORS was added.
+- **Who can use it: you and a few invited people.** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) lets only users with the `invited` role open the frontend, signing in with a Microsoft account.
+- **The backend has its own protection.** The sign-in only covers the frontend page, so the backend also needs the shared `API_KEY`, otherwise anyone who found its address could run up Azure OpenAI costs.
+- **Secrets stay out of git and out of the image.** [backend/.dockerignore](backend/.dockerignore) keeps `.env` out of the image. [deploy.ps1](deploy.ps1) reads `.env` at run time and stores each value as a Container Apps secret.
 
-Both are **indexed** together with the policy by `python -m indexing.ragindexing`. Because they share the product and version with the policy, two things were added so the documents do not collide: the file name is part of every chunk ID, and every chunk has a `document_type` field (see Stage 3 and Stage 5).
+### How to deploy
 
-Verified answers (each cites the right document and page):
+1. Install the Azure CLI and sign in: `az login`.
+2. Make sure `.env` in the project root holds your Azure settings (see [.env.example](.env.example)) and the search index is filled.
+3. From the project root run `.\deploy.ps1`. It takes a few minutes. It does these steps:
+   - Creates the resource group (if needed) and the registry.
+   - Builds the backend image inside Azure, so local Docker is not needed.
+   - Creates the Static Web App first, because its address must go into `CORS_ORIGINS`.
+   - Creates the Container Apps environment and the backend app with all settings as secrets, plus a new random `API_KEY`.
+   - Builds the frontend against the backend address and key, and uploads it.
+4. Invite yourself (the frontend lets in invited users only). Use a Microsoft account email:
 
-- "Who can approve a total loading of +60%?" A senior underwriter, up to +75% (underwriting rules, page 2).
-- "What is the excess on an MRI scan?" GBP 50 per scan (claims handling, page 3).
-- "What evidence is needed for type 2 diabetes?" The latest HbA1c result and a GP report, within 21 days (underwriting rules, page 3).
-- "What is the waiting period for inpatient treatment?" 14 days (policy, page 10).
-- "Am I covered for flood damage?" "I don't know": none of the three documents mentions floods.
+```powershell
+az staticwebapp users invite --name insur-rag-web --resource-group insu_rag_rg --authentication-provider aad --user-details <your-microsoft-email> --domain white-dune-05b8e1a0f.8.azurestaticapps.net --roles invited --invitation-expiration-in-hours 24
+```
+
+5. Open the invitation link it prints, sign in, then open the frontend address and ask a question.
+
+Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the backend app, which also generates a new `API_KEY`, and the rebuilt frontend gets the new key, so the two stay in sync.
+
+### Problems met and how they were fixed
+
+1. **PowerShell stopped on an `az` warning.** `az acr build` prints "Packing source code" on stderr, and Windows PowerShell treated that as a fatal error. Fix: `$ErrorActionPreference` is `Continue` and each step checks the exit code.
+2. **`az acr build` crashed on special characters** in the streamed build log (a `charmap` encoding error), although the build itself succeeded in Azure. Fix: build with `--no-logs` and poll the build status until it is `Succeeded`.
+3. **App Service refused the plan: the subscription's quota for B1 instances is 0.** Fix: switched the backend to Azure Container Apps, which needs no such quota and scales to zero when idle.
+4. **Static Web Apps refused West Europe** ("region is currently not accepting new customers"), and UK South is not offered. Fix: East US 2. This only holds the static frontend files.
+
+### Verified
+
+- The backend `/docs` page returns 200.
+- `POST /api/ask` without the key returns 401.
+- The frontend address redirects to the Microsoft sign-in (302).
+- The CORS preflight from `http://localhost:5173` that asks to send the key header returns 200 (tested locally).
+- `npm run build` passes with the new [api.ts](frontend/src/api.ts).
+- **Not yet verified:** inviting a user, signing in, and getting an answer from the deployed site. A call with a correct key was not made because it would call Azure OpenAI.
+
+### Things to know
+
+- **First question after idle is slow.** The backend scales to zero, so it can take 10 to 30 seconds to start.
+- **The key is in the frontend code.** The `API_KEY` is built into the frontend JavaScript. Only invited, signed-in users can load it, but any of them could read it. It protects against strangers, not against invited users.
+- **Cost.** The Basic registry costs a few pounds a month. Container Apps and Static Web Apps cost almost nothing at this size.
+- **Do not delete the resource group `insu_rag_rg`.** It also contains `insuragservice` (AI Search) and `insuragopenai` (Azure OpenAI). To remove only this app, delete the container app, the Container Apps environment, the static web app and the registry one by one.
+- **Different names.** Names must be unique across Azure. Anyone else using [deploy.ps1](deploy.ps1) has to change the names at the top.
+- **The registry admin login is switched on** so the container can pull its image. A managed identity would be the more secure setup.
 
 ## Next steps
 
-- Remove the index entries of a PDF that is deleted from `backend/data/`.
-- Use `document_type` to search only one kind of document (needs explicit index fields, see below).
-- Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
-- Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
-- Tighten the prompt so it cites only the pages that support a statement.
-- Add a script to rebuild the index when the documents or the embedding model change.
+- Replace the shared API key with per-user sign-in on the backend.
+- Replace the registry admin login with a managed identity.
+- Run the deploy from a CI pipeline instead of by hand.
