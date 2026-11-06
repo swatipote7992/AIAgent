@@ -31,8 +31,8 @@ export default function App() {
     setInput("");
 
     try {
-      const { answer, chunks } = await askQuestion(text);
-      setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "done", answer, chunks } : t)));
+      const { answer, followups, chunks } = await askQuestion(text);
+      setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "done", answer, followups, chunks } : t)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong";
       setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "error", error: message } : t)));
@@ -72,12 +72,33 @@ export default function App() {
 
           {turns.map((turn) => (
             <section key={turn.id} className={turn.id === selected?.id ? "turn selected" : "turn"}>
-              <button className="question" onClick={() => setSelectedId(turn.id)}>
-                <span className="prompt">$</span> ask "{turn.question}"
-              </button>
+              <div>
+                <div className="label">Question</div>
+                <button className="question" onClick={() => setSelectedId(turn.id)}>
+                  <span className="prompt">$</span> ask "{turn.question}"
+                </button>
+              </div>
               {turn.status === "loading" && <div className="status">Searching the policy...</div>}
               {turn.status === "error" && <div className="card error">{turn.error}</div>}
-              {turn.status === "done" && <div className="card answer">{turn.answer}</div>}
+              {turn.status === "done" && (
+                <div>
+                  <div className="label">Answer</div>
+                  <div className="card answer">{turn.answer}</div>
+                </div>
+              )}
+              {turn.status === "done" && !busy && turn.id === turns[turns.length - 1].id && !!turn.followups?.length && (
+                <div className="followups">
+                  <div className="label">Suggested follow-up questions</div>
+                  {turn.followups.map((followup) => (
+                    <button key={followup} className="followup" onClick={() => ask(followup)}>
+                      <span className="arrow" aria-hidden="true">
+                        ↳
+                      </span>
+                      {followup}
+                    </button>
+                  ))}
+                </div>
+              )}
             </section>
           ))}
           <div ref={endRef} />

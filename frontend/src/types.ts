@@ -7,6 +7,7 @@ export interface Chunk {
 
 export interface AskResponse {
   answer: string;
+  followups: string[];
   chunks: Chunk[];
 }
 
@@ -15,6 +16,7 @@ export interface Turn {
   question: string;
   status: "loading" | "done" | "error";
   answer?: string;
+  followups?: string[];
   chunks?: Chunk[];
   error?: string;
 }

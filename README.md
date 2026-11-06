@@ -349,7 +349,7 @@ Two protections were added for the deployed version:
 - **CORS.** The frontend and the backend are on different addresses, so [ragapi.py](backend/api/ragapi.py) allows calls only from the frontend addresses listed in the `CORS_ORIGINS` setting (default `http://localhost:5173`), POST only.
 - **API key.** `POST /api/ask` needs an `X-API-Key` header equal to the `API_KEY` setting. If `API_KEY` is not set (local development) the check is skipped. Without or with a wrong key the answer is 401.
 
-The response is `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
+The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [insur_llm.py](backend/answering/insur_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
 
 The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
 
@@ -358,6 +358,7 @@ The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API
 React with TypeScript, built with Vite, in the dark console theme (design 4 from the mockups). The screen has a chat column on the left and a "Retrieved chunks" panel on the right.
 
 - [src/App.tsx](frontend/src/App.tsx): the page. Example questions on an empty chat, a transcript of questions and answers, and an input box (Enter sends, Shift+Enter adds a line). Click a question to see the chunks that were retrieved for it. Each chunk expands to show its text.
+- Follow-up questions: under the latest answer, [App.tsx](frontend/src/App.tsx) shows the suggested follow-ups as buttons. Clicking one asks it like any other question. Typed follow-ups are still answered on their own, because the chat has no memory of earlier questions yet.
 - [src/api.ts](frontend/src/api.ts): the call to `/api/ask`. When deployed it calls the backend address in `VITE_API_URL` and sends the key in `VITE_API_KEY`; both are empty in development.
 - [src/types.ts](frontend/src/types.ts): the TypeScript types for the API response.
 - [src/styles.css](frontend/src/styles.css): the dark theme. On narrow screens the chunks panel moves below the chat.
