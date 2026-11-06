@@ -54,7 +54,7 @@ export default function App() {
   return (
     <div className="app">
       <main className="chat">
-        <header className="brand">&gt; policy-rag</header>
+        <header className="brand">&gt; insur-agent</header>
 
         <div className="transcript">
           {turns.length === 0 && (
