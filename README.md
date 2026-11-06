@@ -166,14 +166,13 @@ Each stage is described below in the same order.
 
 `load_pdf()` uses `PyPDFLoader` to return one document per page. It only loads; it does nothing when imported.
 
-The input is the fictional sample policy [insurance_policy.pdf](backend/data/insurance_policy.pdf). It has 14 pages and covers:
+The input is any PDF placed in `backend/data/`, for example a policy, an underwriting guide or a claims guide. Each is loaded the same way. A document of this kind typically has:
 
-- Definitions, scope of cover and the underwriting process (pages 1-4)
-- Underwriting decision matrix by age, BMI and smoking (page 5)
-- Outcomes for medical conditions such as hypertension, diabetes, asthma and cancer (page 6)
-- Mental health, occupation and lifestyle underwriting (pages 7-8)
-- General exclusions, waiting periods, premiums and loadings, claims (pages 9-12)
-- Appeals and review of underwriting decisions (page 13) and contact details (page 14)
+- A title page and definitions.
+- Sections on the rules that apply, such as what is covered, what is excluded and who can approve what.
+- Tables, such as limits, loadings or decision matrices.
+- Procedures, such as how to make a claim or appeal a decision.
+- Contact details at the end.
 
 ## Stage 2: Clean and prepare the extracted text ([clean_text.py](backend/indexing/clean_text.py))
 
@@ -400,35 +399,6 @@ Open http://localhost:5173. To check types and make a production build: `npm run
 - Streaming the answer as it is written.
 - Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is protected by the frontend sign-in plus the shared API key (see "Deploying to Azure").
 
-## More sample documents: underwriting rules and claims
-
-Two separate fictional internal guides sit next to the policy in `data/`. Both are for the same product (`NH-2026-01`, version 3.2) and are consistent with the policy document (same loadings and limits), adding detail the policy does not have.
-
-**[underwriting_rules.pdf](backend/data/underwriting_rules.pdf)** (6 pages: a title page and five sections):
-
-- Authority levels by role, with loading limits.
-- Evidence requirements (age 50 or over, cardiac conditions, diabetes, hypertension, and others).
-- Referral rules, decline reasons, and postponements and exclusions.
-
-**[claims_handling.pdf](backend/data/claims_handling.pdf)** (7 pages: a title page and six sections):
-
-- Pre-authorisation (valid for 90 days) and emergency treatment.
-- Annual limits and excess by benefit.
-- Required documents, and the 6-month time limit.
-- Reasons a claim is declined, fraud checks, and claim appeals.
-
-Example questions: who can approve a +60% loading (underwriting rules), what evidence is needed for diabetes (underwriting rules), and what the excess is on an MRI (claims handling).
-
-Both are **indexed** together with the policy by `python -m indexing.ragindexing`. Because they share the product and version with the policy, two things were added so the documents do not collide: the file name is part of every chunk ID, and every chunk has a `document_type` field (see Stage 3 and Stage 5).
-
-Verified answers (each cites the right document and page):
-
-- "Who can approve a total loading of +60%?" A senior underwriter, up to +75% (underwriting rules, page 2).
-- "What is the excess on an MRI scan?" GBP 50 per scan (claims handling, page 3).
-- "What evidence is needed for type 2 diabetes?" The latest HbA1c result and a GP report, within 21 days (underwriting rules, page 3).
-- "What is the waiting period for inpatient treatment?" 14 days (policy, page 10).
-- "Am I covered for flood damage?" "I don't know": none of the three documents mentions floods.
-
 ## Deploying to Azure
 
 The app runs as two parts in the resource group `insu_rag_rg`. The same group already holds the Azure OpenAI and AI Search resources.
@@ -498,12 +468,6 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 
 ## Next steps
 
-- Remove the index entries of a PDF that is deleted from `backend/data/`.
-- Use `document_type` to search only one kind of document (needs explicit index fields, see below).
-- Define the index fields explicitly so `access_level` and `document_version` can be used as filters.
-- Enable semantic ranking: define a semantic configuration when the index is created, then use `semantic_hybrid`.
-- Tighten the prompt so it cites only the pages that support a statement.
-- Add a script to rebuild the index when the documents or the embedding model change.
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
