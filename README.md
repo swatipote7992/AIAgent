@@ -2,7 +2,7 @@
 
 A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI (`text-embedding-3-small` for embeddings, `gpt-4.1-mini` for answers) and Azure AI Search, managed with **pip** and `backend/requirements.txt`. The code lives in `backend/`. Commands are for Windows PowerShell; each block says which folder to run it from.
 
-**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations. The app is also deployed to Azure (see "Deploying to Azure" below); signing in and asking a question on the deployed site has not been confirmed yet.
+**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations. The app is also deployed to Azure (see "Deploying to Azure" below), and signing in and asking a question on the deployed site works.
 
 ## Project layout
 
@@ -456,7 +456,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 - The frontend address redirects to the Microsoft sign-in (302).
 - The CORS preflight from `http://localhost:5173` that asks to send the key header returns 200 (tested locally).
 - `npm run build` passes with the new [api.ts](frontend/src/api.ts).
-- **Not yet verified:** inviting a user, signing in, and getting an answer from the deployed site. A call with a correct key was not made because it would call Azure OpenAI.
+- Inviting a user, signing in and getting an answer from the deployed site was done and confirmed by you. I did not check it myself, and I made no call with the correct key from here because it would call Azure OpenAI.
 
 ### Things to know
 
