@@ -9,10 +9,6 @@ REQUIRED_SETTINGS = ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY")
 
 
 def get_embedding_model() -> AzureOpenAIEmbeddings:
-    """Create the Azure OpenAI embedding model (text-embedding-3-small by default).
-
-    The deployment name, endpoint and API version must match what was created in Azure.
-    """
     missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
