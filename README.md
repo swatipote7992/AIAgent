@@ -2,7 +2,7 @@
 
 A RAG project over PDF insurance policy documents, built with LangChain, Azure OpenAI (`text-embedding-3-small` for embeddings, `gpt-4.1-mini` for answers) and Azure AI Search, managed with **pip** and `backend/requirements.txt`. The code lives in `backend/`. Commands are for Windows PowerShell; each block says which folder to run it from.
 
-**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations. The app is also deployed to Azure (see "Deploying to Azure" below); signing in and asking a question on the deployed site has not been confirmed yet.
+**Status:** the whole RAG flow works end to end for all three sample documents (the policy, the underwriting rules guide and the claims guide). Every PDF in `backend/data/` is loaded, cleaned, enriched with metadata, split into chunks, embedded and stored in an Azure AI Search index (27 chunks). A question then retrieves the most relevant chunks and `gpt-4.1-mini` answers from them with source and page citations. The app is also deployed to Azure (see "Deploying to Azure" below), and signing in and asking a question on the deployed site works.
 
 ## Project layout
 
@@ -48,9 +48,7 @@ AIAgent/
 | [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `insur_llm.py` |
 | [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
 | [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
-| [insurance_policy.pdf](backend/data/insurance_policy.pdf) | Fictional sample policy used as input |
-| [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) | Fictional internal underwriting rules guide (6 pages). Indexed |
-| [claims_handling.pdf](backend/data/claims_handling.pdf) | Fictional internal claims handling guide (7 pages). Indexed |
+| [insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [audi](backend/data/insurance_audi_v1.pdf), [bmw](backend/data/insurance_bmw_v1.pdf), [mercedes](backend/data/insurance_mercedes_v1.pdf) | Fictional mock car insurance policies used as input |
 | [deploy.ps1](deploy.ps1) | Deploys the backend (Azure Container Apps) and the frontend (Azure Static Web Apps) |
 | [backend/Dockerfile](backend/Dockerfile) | Builds the backend container image |
 | [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Makes the deployed frontend require sign-in, invited users only |
@@ -108,7 +106,7 @@ If the virtual environment was moved from another folder and misbehaves (for exa
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | Name of your chat model deployment | `gpt-4.1-mini` |
 | `AZURE_SEARCH_ENDPOINT` | Azure AI Search endpoint | required |
 | `AZURE_SEARCH_KEY` | Azure AI Search admin key | required |
-| `AZURE_SEARCH_INDEX` | Index name | `insurance-policies` |
+| `AZURE_SEARCH_INDEX` | Index name | `insurance-policies-v2` |
 
 The deployment name, endpoint and API version must match what you created in Azure. If a required setting is missing, the program stops with a "Missing settings in .env" message naming it.
 
@@ -133,7 +131,7 @@ git status --short
 
 The project has two phases. **Indexing** reads the PDF and fills the Azure AI Search index; run it when the documents change. **Answering** (the API and the frontend, see [Web app](#web-app-api-and-frontend)) reads from that index for every question. They are separate, so asking questions does not re-embed the PDF.
 
-[indexing/ragindexing.py](backend/indexing/ragindexing.py) is the entry point of the indexing phase. It indexes every PDF in `backend/data/` ([insurance_policy.pdf](backend/data/insurance_policy.pdf), [underwriting_rules.pdf](backend/data/underwriting_rules.pdf) and [claims_handling.pdf](backend/data/claims_handling.pdf)), one after the other, passes the result of each stage to the next, and prints a short summary after every stage. To add a document, put a PDF in `backend/data/` and run it again. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
+[indexing/ragindexing.py](backend/indexing/ragindexing.py) is the entry point of the indexing phase. It indexes every PDF in `backend/data/` (the four `insurance_*_v1.pdf` files), one after the other, passes the result of each stage to the next, and prints a short summary after every stage. To add a document, put a PDF in `backend/data/` and run it again. Set the project up first (see [Setup](#setup)), then run it from inside `backend/` with the virtual environment active:
 
 ```powershell
 cd backend
@@ -202,7 +200,7 @@ Every page, and therefore every chunk (the splitter copies page metadata onto it
 - `source`: the file name only, for example `insurance_policy.pdf` (not the local path).
 - `page`: zero-based page index from the loader, and `page_label`: the human page number.
 - `total_pages`.
-- `document_type`: the file name without `.pdf` (`insurance_policy`, `underwriting_rules` or `claims_handling`), so each chunk records which kind of document it is from.
+- `document_type`: the file name without `.pdf` (for example `insurance_audi_v1`), so each chunk records which kind of document it is from.
 - `policy_type`, `document_version`, `product_id` and `access_level` (the extra fields; `access_level` can later be used as a search filter for permissions).
 
 The default values for all three sample documents (they are for the same product and version) are set at the top of [metadata.py](backend/indexing/metadata.py) and should be changed per document when ingesting real policies. Noisy PDF fields such as `producer` and `creationdate` are dropped to keep the stored index small.
@@ -253,7 +251,7 @@ Background on embeddings:
 
 Running `python -m indexing.ragindexing` (from `backend/`) against Azure stored 27 chunks (7 from the claims guide, 14 from the policy, 6 from the underwriting guide). Querying the index afterwards showed:
 
-- Index `insurance-policies` with the fields `id`, `content`, `content_vector` and `metadata`.
+- Index `insurance-policies-v2` (earlier: `insurance-policies`) with the fields `id`, `content`, `content_vector` and `metadata`.
 - Document count: 27, all IDs unique, none left over from the earlier single-document index.
 - `content_vector` size: 1536 dimensions, matching `text-embedding-3-small`.
 - A sample entry with ID `NH-2026-01-insurance_policy-v3-2-p0-c0` and its metadata JSON (source, document type, page, policy type, document version, product ID).
@@ -349,7 +347,7 @@ Two protections were added for the deployed version:
 - **CORS.** The frontend and the backend are on different addresses, so [ragapi.py](backend/api/ragapi.py) allows calls only from the frontend addresses listed in the `CORS_ORIGINS` setting (default `http://localhost:5173`), POST only.
 - **API key.** `POST /api/ask` needs an `X-API-Key` header equal to the `API_KEY` setting. If `API_KEY` is not set (local development) the check is skipped. Without or with a wrong key the answer is 401.
 
-The response is `{"answer": "...", "chunks": [{"source", "page", "title", "text"}, ...]}`.
+The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [insur_llm.py](backend/answering/insur_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
 
 The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
 
@@ -358,6 +356,7 @@ The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API
 React with TypeScript, built with Vite, in the dark console theme (design 4 from the mockups). The screen has a chat column on the left and a "Retrieved chunks" panel on the right.
 
 - [src/App.tsx](frontend/src/App.tsx): the page. Example questions on an empty chat, a transcript of questions and answers, and an input box (Enter sends, Shift+Enter adds a line). Click a question to see the chunks that were retrieved for it. Each chunk expands to show its text.
+- Follow-up questions: under the latest answer, [App.tsx](frontend/src/App.tsx) shows the suggested follow-ups as buttons. Clicking one asks it like any other question. Typed follow-ups are still answered on their own, because the chat has no memory of earlier questions yet.
 - [src/api.ts](frontend/src/api.ts): the call to `/api/ask`. When deployed it calls the backend address in `VITE_API_URL` and sends the key in `VITE_API_KEY`; both are empty in development.
 - [src/types.ts](frontend/src/types.ts): the TypeScript types for the API response.
 - [src/styles.css](frontend/src/styles.css): the dark theme. On narrow screens the chunks panel moves below the chat.
@@ -455,7 +454,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 - The frontend address redirects to the Microsoft sign-in (302).
 - The CORS preflight from `http://localhost:5173` that asks to send the key header returns 200 (tested locally).
 - `npm run build` passes with the new [api.ts](frontend/src/api.ts).
-- **Not yet verified:** inviting a user, signing in, and getting an answer from the deployed site. A call with a correct key was not made because it would call Azure OpenAI.
+- Inviting a user, signing in and getting an answer from the deployed site was done and confirmed by you. I did not check it myself, and I made no call with the correct key from here because it would call Azure OpenAI.
 
 ### Things to know
 
@@ -465,6 +464,88 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 - **Do not delete the resource group `insu_rag_rg`.** It also contains `insuragservice` (AI Search) and `insuragopenai` (Azure OpenAI). To remove only this app, delete the container app, the Container Apps environment, the static web app and the registry one by one.
 - **Different names.** Names must be unique across Azure. Anyone else using [deploy.ps1](deploy.ps1) has to change the names at the top.
 - **The registry admin login is switched on** so the container can pull its image. A managed identity would be the more secure setup.
+
+## Mock car insurance data
+
+You asked for four mock car insurance documents: one generic and one each for Audi, BMW and Mercedes. They are fictional PDFs, saved in the same folder and format as the existing documents, so the indexing pipeline picks them up automatically.
+
+- [insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf): standard cover levels, exclusions, excesses by driver age, no claims discount, claims and cancellation.
+- [insurance_audi_v1.pdf](backend/data/insurance_audi_v1.pdf): Audi-specific excesses, genuine parts rules, key and ADAS recalibration, tracker discount and example premiums.
+- [insurance_bmw_v1.pdf](backend/data/insurance_bmw_v1.pdf): the same sections with BMW rules (carbon fibre repairs, Digital Key, M model excess).
+- [insurance_mercedes_v1.pdf](backend/data/insurance_mercedes_v1.pdf): the same sections with Mercedes-Benz rules (approved repairer excess, air suspension, AMG excess).
+
+The earlier documents (`insurance_policy.pdf`, `underwriting_rules.pdf` and `claims_handling.pdf`) were then deleted from `backend/data/` at your request; they are still in git history. Some later sections below still use them as worked examples. The file names become the document type in the metadata, so they show up as `insurance_audi_v1` and so on. The PDFs were generated with a throwaway script outside the project, and `reportlab` was not added to [requirements.txt](backend/requirements.txt). To make the chatbot answer from them, run the indexing again (see "Indexing"). I did not run it, because it calls Azure OpenAI.
+
+## Changing the documents and re-indexing
+
+The documents changed: the three earlier PDFs were replaced by four mock car insurance PDFs ([insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [insurance_audi_v1.pdf](backend/data/insurance_audi_v1.pdf), [insurance_bmw_v1.pdf](backend/data/insurance_bmw_v1.pdf) and [insurance_mercedes_v1.pdf](backend/data/insurance_mercedes_v1.pdf)). Because the content is different, the index is rebuilt from scratch instead of updating the old one.
+
+1. **New index.** A new index named `insurance-policies-v2` is used, in the same Azure AI Search service (`insuragservice`). The old index `insurance-policies` is left untouched. The name is the default in [vector_store.py](backend/vector_embedding/vector_store.py) and is listed in [.env.example](.env.example). It can be overridden with `AZURE_SEARCH_INDEX`.
+2. **Run the indexing pipeline again** from inside `backend/` with the virtual environment active:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m indexing.ragindexing
+```
+
+The module name is `indexing.ragindexing` (the file is [ragindexing.py](backend/indexing/ragindexing.py)). Typing `indexing.rank indexing` or `python m ...` does not work: the flag is `-m` with a dash, and the module name must match the file name.
+
+**Output of the run:**
+
+```text
+python -m indexing.ragindexing
+=== insurance_audi_v1.pdf
+Loaded 3 pages
+3 pages after cleaning
+Metadata added to 3 pages
+Split into 6 chunks
+Removed 0 old entries for insurance_audi_v1.pdf
+Stored 6 chunks in the Azure AI Search index
+=== insurance_bmw_v1.pdf
+Loaded 3 pages
+Skipped empty/short page 3
+2 pages after cleaning
+Metadata added to 2 pages
+Split into 5 chunks
+Removed 0 old entries for insurance_bmw_v1.pdf
+Stored 5 chunks in the Azure AI Search index
+=== insurance_generic_v1.pdf
+Loaded 2 pages
+2 pages after cleaning
+Metadata added to 2 pages
+Split into 4 chunks
+Removed 0 old entries for insurance_generic_v1.pdf
+Stored 4 chunks in the Azure AI Search index
+=== insurance_mercedes_v1.pdf
+Loaded 3 pages
+Skipped empty/short page 3
+2 pages after cleaning
+Metadata added to 2 pages
+Split into 5 chunks
+Removed 0 old entries for insurance_mercedes_v1.pdf
+Stored 5 chunks in the Azure AI Search index
+```
+
+What it shows:
+
+- All four files were indexed, 20 chunks in total (6 + 5 + 4 + 5), so the document count in `insurance-policies-v2` should be 20.
+- "Removed 0 old entries" for every file is expected on a first run into a new index. On a re-run it would show the old chunks of that file being replaced.
+- Page 3 of the BMW and Mercedes PDFs was skipped as empty or too short, so only the first two pages of those two files were indexed. The page 3 text is probably a short leftover of the last table, so check that nothing needed was dropped. The generic file has 2 pages and the Audi file has 3 pages that all passed.
+
+3. **Check it.** In the Azure portal, open `insuragservice`, then Indexes, then `insurance-policies-v2`, and check that the document count is above 0. The deployed backend uses the new index after it is redeployed with [deploy.ps1](deploy.ps1).
+
+### Adding more documents later
+
+Question: if more documents are added, is a new index needed? No. Put the new PDF in `backend/data/` and run `python -m indexing.ragindexing` again against the same index. Before storing, [vector_store.py](backend/vector_embedding/vector_store.py) removes the old entries of each file being indexed (the "Removed N old entries" line), so unchanged files are simply refreshed and new files are added. A new index is only needed when the structure changes: a different embedding model or vector size, or new metadata fields in the index.
+
+### Five more brands added
+
+Five more mock policies were added to `backend/data/`, in the same format and sections as the first brand policies: [insurance_ford_v1.pdf](backend/data/insurance_ford_v1.pdf), [insurance_peugeot_v1.pdf](backend/data/insurance_peugeot_v1.pdf), [insurance_volvo_v1.pdf](backend/data/insurance_volvo_v1.pdf), [insurance_toyota_v1.pdf](backend/data/insurance_toyota_v1.pdf) and [insurance_tesla_v1.pdf](backend/data/insurance_tesla_v1.pdf). Toyota and Tesla were added on top of the brands you named. The four earlier PDFs were regenerated with the same content. To put them in the index, run `python -m indexing.ragindexing` again; the index stays `insurance-policies-v2`, and the existing files are replaced, not duplicated.
+
+### Updating the example questions
+
+The three example questions on the frontend start screen still asked about the old documents (smoker BMI, flood damage, claim time). They now ask about the car insurance data: BMW excess for a 22-year-old, Tesla battery damage cover and the Volvo courtesy car period. They are set in [App.tsx](frontend/src/App.tsx). The start screen text now says "car insurance policy documents".
 
 ## Next steps
 

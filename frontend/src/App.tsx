@@ -3,9 +3,9 @@ import { askQuestion } from "./api";
 import type { Turn } from "./types";
 
 const EXAMPLES = [
-  "What underwriting decision applies to a smoker with a BMI of 32?",
-  "Am I covered for flood damage?",
-  "How long do I have to submit a claim?",
+  "What is the excess for a BMW driver aged 22?",
+  "Does my Tesla policy cover battery damage after an accident?",
+  "How long is the courtesy car provided for a Volvo?",
 ];
 
 export default function App() {
@@ -31,8 +31,8 @@ export default function App() {
     setInput("");
 
     try {
-      const { answer, chunks } = await askQuestion(text);
-      setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "done", answer, chunks } : t)));
+      const { answer, followups, chunks } = await askQuestion(text);
+      setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "done", answer, followups, chunks } : t)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong";
       setTurns((current) => current.map((t) => (t.id === id ? { ...t, status: "error", error: message } : t)));
@@ -54,12 +54,12 @@ export default function App() {
   return (
     <div className="app">
       <main className="chat">
-        <header className="brand">&gt; policy-rag</header>
+        <header className="brand">&gt; insur-agent</header>
 
         <div className="transcript">
           {turns.length === 0 && (
             <div className="empty">
-              <p>Ask a question about the insurance policy documents.</p>
+              <p>Ask a question about the car insurance policy documents.</p>
               <div className="examples">
                 {EXAMPLES.map((example) => (
                   <button key={example} className="example" onClick={() => ask(example)}>
@@ -72,12 +72,33 @@ export default function App() {
 
           {turns.map((turn) => (
             <section key={turn.id} className={turn.id === selected?.id ? "turn selected" : "turn"}>
-              <button className="question" onClick={() => setSelectedId(turn.id)}>
-                <span className="prompt">$</span> ask "{turn.question}"
-              </button>
+              <div>
+                <div className="label">Question</div>
+                <button className="question" onClick={() => setSelectedId(turn.id)}>
+                  <span className="prompt">$</span> ask "{turn.question}"
+                </button>
+              </div>
               {turn.status === "loading" && <div className="status">Searching the policy...</div>}
               {turn.status === "error" && <div className="card error">{turn.error}</div>}
-              {turn.status === "done" && <div className="card answer">{turn.answer}</div>}
+              {turn.status === "done" && (
+                <div>
+                  <div className="label">Answer</div>
+                  <div className="card answer">{turn.answer}</div>
+                </div>
+              )}
+              {turn.status === "done" && !busy && turn.id === turns[turns.length - 1].id && !!turn.followups?.length && (
+                <div className="followups">
+                  <div className="label">Suggested follow-up questions</div>
+                  {turn.followups.map((followup) => (
+                    <button key={followup} className="followup" onClick={() => ask(followup)}>
+                      <span className="arrow" aria-hidden="true">
+                        ↳
+                      </span>
+                      {followup}
+                    </button>
+                  ))}
+                </div>
+              )}
             </section>
           ))}
           <div ref={endRef} />

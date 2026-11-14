@@ -15,11 +15,7 @@ REQUIRED_SETTINGS = ("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
 
 def create_vector_store() -> AzureSearch:
-    """Connect to the Azure AI Search index. LangChain creates the index if it does not exist.
-
-    The index vector size comes from the embedding model, so if the model changes
-    a new index is needed and everything must be re-embedded.
-    """
+    """Connect to the Azure AI Search index. LangChain creates the index if it does not exist."""
     missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
@@ -27,7 +23,7 @@ def create_vector_store() -> AzureSearch:
     return AzureSearch(
         azure_search_endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
         azure_search_key=os.environ["AZURE_SEARCH_KEY"],
-        index_name=os.environ.get("AZURE_SEARCH_INDEX", "insurance-policies"),
+        index_name=os.environ.get("AZURE_SEARCH_INDEX", "insurance-policies-v2"),
         embedding_function=get_embedding_model(),
     )
 
