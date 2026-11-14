@@ -3,9 +3,9 @@ import { askQuestion } from "./api";
 import type { Turn } from "./types";
 
 const EXAMPLES = [
-  "What underwriting decision applies to a smoker with a BMI of 32?",
-  "Am I covered for flood damage?",
-  "How long do I have to submit a claim?",
+  "What is the excess for a BMW driver aged 22?",
+  "Does my Tesla policy cover battery damage after an accident?",
+  "How long is the courtesy car provided for a Volvo?",
 ];
 
 export default function App() {
@@ -59,7 +59,7 @@ export default function App() {
         <div className="transcript">
           {turns.length === 0 && (
             <div className="empty">
-              <p>Ask a question about the insurance policy documents.</p>
+              <p>Ask a question about the car insurance policy documents.</p>
               <div className="examples">
                 {EXAMPLES.map((example) => (
                   <button key={example} className="example" onClick={() => ask(example)}>

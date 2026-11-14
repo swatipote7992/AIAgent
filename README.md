@@ -543,6 +543,10 @@ Question: if more documents are added, is a new index needed? No. Put the new PD
 
 Five more mock policies were added to `backend/data/`, in the same format and sections as the first brand policies: [insurance_ford_v1.pdf](backend/data/insurance_ford_v1.pdf), [insurance_peugeot_v1.pdf](backend/data/insurance_peugeot_v1.pdf), [insurance_volvo_v1.pdf](backend/data/insurance_volvo_v1.pdf), [insurance_toyota_v1.pdf](backend/data/insurance_toyota_v1.pdf) and [insurance_tesla_v1.pdf](backend/data/insurance_tesla_v1.pdf). Toyota and Tesla were added on top of the brands you named. The four earlier PDFs were regenerated with the same content. To put them in the index, run `python -m indexing.ragindexing` again; the index stays `insurance-policies-v2`, and the existing files are replaced, not duplicated.
 
+### Updating the example questions
+
+The three example questions on the frontend start screen still asked about the old documents (smoker BMI, flood damage, claim time). They now ask about the car insurance data: BMW excess for a 22-year-old, Tesla battery damage cover and the Volvo courtesy car period. They are set in [App.tsx](frontend/src/App.tsx). The start screen text now says "car insurance policy documents".
+
 ## Next steps
 
 - Replace the shared API key with per-user sign-in on the backend.
