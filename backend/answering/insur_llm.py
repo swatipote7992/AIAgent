@@ -2,12 +2,21 @@ import os
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
+from pydantic import BaseModel, Field
 from answering.retrieval import get_retriever
 
 load_dotenv(override=True)  # .env wins over variables already set in the shell
+
+
+class Reply(BaseModel):
+    """What the chat model returns: the answer plus questions the user could ask next."""
+
+    answer: str = Field(description="The answer, with source and page for each fact.")
+    followups: list[str] = Field(
+        description="Up to 3 short follow-up questions, each complete on its own and answerable from the context."
+    )
 
 
 @lru_cache
@@ -38,15 +47,19 @@ def ask_llm(question: str) -> dict:
         ("system", (
             "Answer only from the context below. "
             "If the answer is not in the context, say you don't know. "
-            "Mention the source and page for each fact.\n\nContext:\n{context}"
+            "Mention the source and page for each fact. "
+            "Also suggest up to 3 follow-up questions the user could ask next. Each must be a short, "
+            "complete question that makes sense on its own and can be answered from the context below. "
+            "If you do not know the answer, suggest no follow-ups.\n\nContext:\n{context}"
         )),
         ("human", "{question}"),
     ])
-    chain = prompt | llm | StrOutputParser()
-    answer = chain.invoke({"context": context, "question": question})
+    chain = prompt | llm.with_structured_output(Reply)
+    reply = chain.invoke({"context": context, "question": question})
 
     return {
-        "answer": answer,
+        "answer": reply.answer,
+        "followups": reply.followups[:3],
         "chunks": [
             {
                 "source": c.metadata.get("source"),
