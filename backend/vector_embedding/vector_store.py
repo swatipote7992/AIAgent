@@ -23,7 +23,7 @@ def create_vector_store() -> AzureSearch:
     return AzureSearch(
         azure_search_endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
         azure_search_key=os.environ["AZURE_SEARCH_KEY"],
-        index_name=os.environ.get("AZURE_SEARCH_INDEX", "insurance-policies"),
+        index_name=os.environ.get("AZURE_SEARCH_INDEX", "insurance-policies-v2"),
         embedding_function=get_embedding_model(),
     )
 
