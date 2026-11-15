@@ -78,12 +78,25 @@ def ready():
     return {"status": "ready", "documents": _ready_cache["documents"]}
 
 
+def simulate_failure_drill():
+    """TEMPORARY: failure drill for testing monitoring and alerts. Does nothing unless SIMULATE_FAILURE is set.
+
+    "error" fails every question and "slow" adds 8 seconds. Remove this function and its call in ask() after the drill.
+    """
+    drill = os.environ.get("SIMULATE_FAILURE", "")
+    if drill == "slow":
+        time.sleep(8)
+    elif drill == "error":
+        raise RuntimeError("Simulated failure for the monitoring drill (SIMULATE_FAILURE=error)")
+
+
 @app.post("/api/ask", dependencies=[Depends(require_api_key)])
 def ask(request: AskRequest):
     """Take the user's question and return the answer with the chunks it was based on."""
     question = request.question.strip()
     started = time.perf_counter()
     try:
+        simulate_failure_drill()
         result = ask_llm(question)
     except Exception as error:
         ms = round((time.perf_counter() - started) * 1000)

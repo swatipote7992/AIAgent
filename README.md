@@ -583,8 +583,29 @@ Applied to the live backend (revision `insur-rag-api--0000001`): `/health` retur
 
 To change the probes on the live app without a full deploy (which would also issue a new `API_KEY`), rebuild the image and update the container app only.
 
+### Failure drill and alert (temporary)
+
+To see what a failing service looks like in the logs and in Azure Monitor, [ragapi.py](backend/api/ragapi.py) has a temporary switch that does nothing unless the environment variable `SIMULATE_FAILURE` is set on the container app: `error` makes every question fail with a 502 (logged as an error, with the exception in Application Insights) and `slow` adds 8 seconds to every answer. The switch is the function `simulate_failure_drill()`, called at the start of `ask()`. Remove the function and its call when the drill is over.
+
+An alert rule `insur-rag-api-5xx-errors` was created on the container app: it fires when the app returns any HTTP 5xx response within 5 minutes, checked every minute, severity 2. It has no action group yet, so it only appears in Monitor, Alerts and sends no email.
+
+Turn the failure on (this makes a new revision, about a minute):
+
+```powershell
+az containerapp update --name insur-rag-api --resource-group insu_rag_rg --set-env-vars SIMULATE_FAILURE=error
+```
+
+Turn it off again:
+
+```powershell
+az containerapp update --name insur-rag-api --resource-group insu_rag_rg --remove-env-vars SIMULATE_FAILURE
+```
+
+While it is on, ask questions on the site, then look at the container app Log stream (error lines), the Application Insights Failures page, and Monitor, Alerts (the alert fires after a minute or two).
+
 ## Next steps
 
+- Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
