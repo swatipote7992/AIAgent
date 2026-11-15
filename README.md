@@ -547,6 +547,29 @@ Five more mock policies were added to `backend/data/`, in the same format and se
 
 The three example questions on the frontend start screen still asked about the old documents (smoker BMI, flood damage, claim time). They now ask about the car insurance data: BMW excess for a 22-year-old, Tesla battery damage cover and the Volvo courtesy car period. They are set in [App.tsx](frontend/src/App.tsx). The start screen text now says "car insurance policy documents".
 
+### Monitoring built into the API
+
+[ragapi.py](backend/api/ragapi.py) now writes one log line for every question: how long it took in milliseconds, the length of the question (the question text itself is not logged), how many chunks were found and which source files they came from. Failures are logged as errors with the reason. A new `GET /health` address returns `{"status": "ok"}` for uptime checks and needs no key. On Azure the lines show up in the container app log stream and in Log Analytics (see below for how to read them). It only takes effect after the backend is redeployed with [deploy.ps1](deploy.ps1).
+
+Read the logs from the terminal:
+
+```powershell
+az containerapp logs show --name insur-rag-api --resource-group insu_rag_rg --follow
+```
+
+Other places to look in the portal: the container app's Metrics (requests, replicas, restarts), the Azure OpenAI resource `insuragopenai` (tokens and throttling), the AI Search service `insuragservice` (document count and queries) and Cost Management.
+
+### Azure Monitor and OpenTelemetry
+
+The API is connected to Azure Monitor through OpenTelemetry:
+
+1. **Resource.** An Application Insights resource `insur-rag-insights` was created in `insu_rag_rg` (UK South). It is workspace-based and uses the same Log Analytics workspace as the Container Apps environment, so the container logs and the telemetry are in one place. [deploy.ps1](deploy.ps1) creates it if it is missing and reuses it otherwise.
+2. **Package.** `azure-monitor-opentelemetry` was added to [requirements.txt](backend/requirements.txt).
+3. **Startup.** [ragapi.py](backend/api/ragapi.py) starts the Azure Monitor exporter before the app is created, but only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set. Locally it is not set, so nothing is sent.
+4. **Deploy.** [deploy.ps1](deploy.ps1) reads the connection string from the resource and passes it to the container app as a secret.
+
+This gives request traces for `/api/ask`, the log lines described above, and calls made to other services. Look at it in the portal under `insur-rag-insights`: Live metrics, Transaction search, Failures, Performance and Application map.
+
 ## Next steps
 
 - Replace the shared API key with per-user sign-in on the backend.

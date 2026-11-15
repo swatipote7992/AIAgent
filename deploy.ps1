@@ -39,7 +39,15 @@ if (az containerapp list --resource-group $rg --query "[?name=='$api'].name" -o 
     Run "az containerapp delete --name $api --resource-group $rg --yes --output none"   # recreate on rerun
 }
 $apiKey = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")   # new shared key on every run
-$values = [ordered]@{ "CORS_ORIGINS" = "https://$webHost"; "API_KEY" = $apiKey }
+$appInsightsName = "insur-rag-insights"   # Application Insights, created once and reused (workspace-based, same region)
+az extension add --name application-insights --yes --only-show-errors
+if (-not (az monitor app-insights component list --resource-group $rg --query "[?name=='$appInsightsName'].name" -o tsv)) {
+    $workspaceId = az containerapp env show --name $env_ --resource-group $rg --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId -o tsv
+    $workspaceArm = az monitor log-analytics workspace list --resource-group $rg --query "[?customerId=='$workspaceId'].id | [0]" -o tsv
+    Run "az monitor app-insights component create --app $appInsightsName --location $location --resource-group $rg --kind web --application-type web --workspace $workspaceArm --output none"
+}
+$appInsightsConn = az monitor app-insights component show --app $appInsightsName --resource-group $rg --query connectionString -o tsv
+$values = [ordered]@{ "CORS_ORIGINS" = "https://$webHost"; "API_KEY" = $apiKey; "APPLICATIONINSIGHTS_CONNECTION_STRING" = $appInsightsConn }
 Get-Content .env | Where-Object { $_ -match "^\s*[A-Za-z_]+=.+" } | ForEach-Object {
     $key, $value = $_.Trim().Split("=", 2)
     $values[$key] = $value
