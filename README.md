@@ -579,6 +579,8 @@ Two checks were added to [ragapi.py](backend/api/ragapi.py), neither needs the A
 
 [deploy.ps1](deploy.ps1) now sets Container Apps probes: liveness on `/health` every 30 seconds, readiness on `/ready` every 15 seconds, and a startup probe on `/ready` (up to about 2.5 minutes), so a cold replica gets no traffic until it can answer. The Azure SDK's per-request INFO logging is turned down so the probes do not flood the logs.
 
+Applied to the live backend (revision `insur-rag-api--0000001`): `/health` returns `{"status": "ok"}` and `/ready` returns 200 with 46 documents. The first attempt to apply the probes failed because the `az` YAML reader rejects pretty-printed JSON; the fix is compact JSON without a byte-order mark, now in [deploy.ps1](deploy.ps1).
+
 To change the probes on the live app without a full deploy (which would also issue a new `API_KEY`), rebuild the image and update the container app only.
 
 ## Next steps

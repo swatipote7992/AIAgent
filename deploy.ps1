@@ -78,7 +78,9 @@ $probes = @(
 )
 $container | Add-Member -NotePropertyName probes -NotePropertyValue $probes -Force
 $probeFile = Join-Path $env:TEMP "insur-rag-probes.json"
-@{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 | Set-Content $probeFile -Encoding utf8
+# compact JSON without a byte-order mark: the az YAML reader rejects pretty-printed JSON and a BOM
+$probeJson = @{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 -Compress
+[System.IO.File]::WriteAllText($probeFile, $probeJson, (New-Object System.Text.UTF8Encoding($false)))
 az containerapp update --name $api --resource-group $rg --yaml $probeFile --output none
 if ($LASTEXITCODE -ne 0) { throw "Failed to add the health probes" }
 Remove-Item $probeFile
