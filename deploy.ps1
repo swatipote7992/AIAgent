@@ -67,6 +67,22 @@ az containerapp create --name $api --resource-group $rg --environment $env_ `
 if ($LASTEXITCODE -ne 0) { throw "Failed to create the container app" }
 $apiHost = az containerapp show --name $api --resource-group $rg --query properties.configuration.ingress.fqdn -o tsv
 
+# Health probes: liveness -> /health (process only), readiness and startup -> /ready (can reach the search index).
+# The container definition is read back and re-sent with probes added, so its env vars and secrets are kept.
+$app = az containerapp show --name $api --resource-group $rg -o json | ConvertFrom-Json
+$container = $app.properties.template.containers[0]
+$probes = @(
+    @{ type = "Liveness";  httpGet = @{ path = "/health"; port = 8000 }; periodSeconds = 30; failureThreshold = 3 },
+    @{ type = "Readiness"; httpGet = @{ path = "/ready";  port = 8000 }; periodSeconds = 15; failureThreshold = 3 },
+    @{ type = "Startup";   httpGet = @{ path = "/ready";  port = 8000 }; periodSeconds = 5;  failureThreshold = 30 }
+)
+$container | Add-Member -NotePropertyName probes -NotePropertyValue $probes -Force
+$probeFile = Join-Path $env:TEMP "insur-rag-probes.json"
+@{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 | Set-Content $probeFile -Encoding utf8
+az containerapp update --name $api --resource-group $rg --yaml $probeFile --output none
+if ($LASTEXITCODE -ne 0) { throw "Failed to add the health probes" }
+Remove-Item $probeFile
+
 # 5. Build the frontend against the backend address and upload it
 Push-Location frontend
 $env:VITE_API_URL = "https://$apiHost"

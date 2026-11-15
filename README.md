@@ -570,6 +570,17 @@ The API is connected to Azure Monitor through OpenTelemetry:
 
 This gives request traces for `/api/ask`, the log lines described above, and calls made to other services. Look at it in the portal under `insur-rag-insights`: Live metrics, Transaction search, Failures, Performance and Application map.
 
+### Health and readiness checks
+
+Two checks were added to [ragapi.py](backend/api/ragapi.py), neither needs the API key:
+
+- `GET /health` (liveness): the process is up. It checks no other service, so an Azure outage never makes Azure restart a healthy container.
+- `GET /ready` (readiness): the AI Search index can be reached and has documents. It returns `{"status": "ready", "documents": N}`, or 503 if the index is unreachable or empty. It does not call Azure OpenAI (cost and rate limits), it never creates a missing index, and it caches the result for 10 seconds. Checked locally against `insurance-policies-v2`: 200 with 46 documents.
+
+[deploy.ps1](deploy.ps1) now sets Container Apps probes: liveness on `/health` every 30 seconds, readiness on `/ready` every 15 seconds, and a startup probe on `/ready` (up to about 2.5 minutes), so a cold replica gets no traffic until it can answer. The Azure SDK's per-request INFO logging is turned down so the probes do not flood the logs.
+
+To change the probes on the live app without a full deploy (which would also issue a new `API_KEY`), rebuild the image and update the container app only.
+
 ## Next steps
 
 - Replace the shared API key with per-user sign-in on the backend.
