@@ -635,9 +635,33 @@ uvx --from git+https://github.com/github/spec-kit.git specify init --here --forc
 
 9. **Ran `/speckit-constitution`.** The constitution at [.specify/memory/constitution.md](.specify/memory/constitution.md) was still the empty template, so it was filled in as version 1.0.0 (ratified 2026-11-16) from the principles you listed. It has nine principles: test-first, FastAPI conventions, React and TypeScript conventions, secrets never printed or logged, no credentials in git, pinned pip dependencies, every step documented in the README, honest reporting and deployment safety. It also has sections for technology and security constraints (including the known limit that the shared API key sits in the frontend bundle) and for the development workflow and quality gates, plus governance with the amendment and versioning rules. No extension hooks were registered, so none ran. The file starts with a temporary "Sync Impact Report" comment to remove before committing. Open items it records: there are no automated tests yet, and the temporary failure drill must be removed after the monitoring drills.
 
+## Secrets hook (Claude Code)
+
+Steps taken to add a hook that stops Claude Code from committing, printing or writing secrets. It enforces constitution principles IV (secrets never printed or logged) and V (no credentials in git). A hook is run by Claude Code itself before a tool call, so it cannot be skipped the way a written rule can.
+
+1. **Checked what existed.** The project had no agents, rules or hooks, only the Spec Kit skills in `.claude/skills/`, and the user settings had no hooks either.
+2. **Decided what to block.** A PreToolUse hook on the shell tools (Bash and PowerShell) and on the file tools (Write, Edit, MultiEdit). The reason is that a deployment token was printed once in command output earlier in this project.
+3. **Wrote the hook script** [block_secrets.py](.claude/hooks/block_secrets.py). Claude Code passes the tool call to it as JSON; an exit code of 2 blocks the call and shows the reason to Claude. It never prints the secret, only which rule was hit. It blocks:
+   - `git add` of `.env` or anything under `.claude/`, and a bulk `git add` (`.`, `-A`, `--all`) while untracked `.env` or `.claude/` files exist;
+   - `git commit` when the staged files include `.env` or `.claude/`, or when the staged changes add something that looks like a secret;
+   - commands that print secrets: reading `.env`, listing environment variables, echoing a variable that holds a key or token, `az` commands that return keys (`list-keys`, `secret show` or `secret list`, `staticwebapp secrets list`) and `--show-secrets`;
+   - file writes that contain a connection string, a private key, a known token format, or a long value assigned to a name such as key, token, secret or password. For `README.md` the check is stricter and also catches any long hex or base64-like string.
+   - Allowed on purpose: writing `.env`, writing `.env.example`, reading `.env.example`, and values with placeholders such as `<your key>`.
+4. **Registered it** in [settings.json](.claude/settings.json), which lists the hook under PreToolUse for the five tools above. It runs with Python from the PATH.
+5. **Tested it.** A test script in the session scratchpad (not part of the project) fed the hook 23 made-up inputs, with the fake secrets built at run time. All 23 gave the expected result: 15 blocked and 8 allowed. This was a test of the script only; no real `git commit` has been run through it yet.
+6. **Seen working live.** The hook was already active in the same session and blocked Claude's own first test file, because it contained a fake connection string. The file was rewritten to build the fake values at run time.
+7. **Known limits.**
+   - The hook cannot see commands you type in your own terminal, only Claude's.
+   - It is a safety net, not a guarantee: a secret printed by a route the hook does not list is not caught.
+   - A legitimate command can be blocked by mistake (for example `az containerapp secret list` with a `--query` that returns only names). If that happens, loosen the matching rule in the script.
+   - `.claude/` is untracked and the hook blocks `git add` of it, including the hook's own files. Review `.claude/` first (principle V), then add the files from your own terminal.
+8. **Not done.** The second hook (asking before commands that change the live app, such as `deploy.ps1`) and the optional rule files were not created.
+
 ## Next steps
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
+- code review agent
+- Hook that blocks secrets: before any file write or git commit, check for API keys or .env content (Principles IV and V).
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
