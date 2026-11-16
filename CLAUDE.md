@@ -27,7 +27,9 @@ npm run dev        # http://localhost:5173
 npm run build      # type check + production build
 ```
 
-Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`). There are no automated tests yet.
+Tests use pytest (dev-only, pinned in [backend/requirements-dev.txt](backend/requirements-dev.txt), not in the Azure image). Run them from `backend/` with the virtual environment active: `pip install -r requirements-dev.txt`, then `python -m pytest`. Today the only tests cover the secrets hook ([backend/tests/test_block_secrets.py](backend/tests/test_block_secrets.py)); the API, indexing and answering code have none yet.
+
+Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`).
 
 ## Architecture
 
@@ -52,7 +54,7 @@ Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, enviro
 - `az containerapp update --yaml` needs compact JSON without a byte-order mark.
 - The Azure SDK and the Azure Monitor exporter log at INFO and can flood the logs (and feed back into telemetry). Keep their loggers at WARNING.
 - `SIMULATE_FAILURE` (`error` or `slow`) in `simulate_failure_drill()` is a **temporary** failure drill. It does nothing when the variable is unset. Never leave it set on the live app, and remove the function once the monitoring drills are finished.
-- Never print secrets (API keys, deployment tokens, connection strings) in output or in the README.
+- Never print secrets (API keys, deployment tokens, connection strings) in output or in the README. A hook enforces this ([.claude/hooks/block_secrets.py](.claude/hooks/block_secrets.py), registered in [.claude/settings.json](.claude/settings.json)); it also blocks `git add` of `.claude/` and `.env`, so review `.claude/` and add it from your own terminal.
 
 ## Spec Kit
 

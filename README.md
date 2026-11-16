@@ -657,6 +657,27 @@ Steps taken to add a hook that stops Claude Code from committing, printing or wr
    - `.claude/` is untracked and the hook blocks `git add` of it, including the hook's own files. Review `.claude/` first (principle V), then add the files from your own terminal.
 8. **Not done.** The second hook (asking before commands that change the live app, such as `deploy.ps1`) and the optional rule files were not created.
 
+### Tests for the secrets hook (pytest)
+
+Steps taken to add the project's first automated tests, for the hook above. Choosing pytest over the built-in `unittest` was your decision: it is the usual runner for FastAPI, and the backend tests that principle I requires will use it too.
+
+1. **Installed pytest** into the backend virtual environment: `pip install pytest` gave version 9.2.0, and `pip check` reported no broken requirements.
+2. **Pinned it, kept out of the Azure image.** [requirements-dev.txt](backend/requirements-dev.txt) includes `requirements.txt` and adds the exact pytest version. The `Dockerfile` installs only `requirements.txt`, so pytest is not in the deployed image. [.dockerignore](backend/.dockerignore) now also leaves out `tests`, `.pytest_cache`, `requirements-dev.txt` and `pytest.ini`, so the tests are not copied into the image either. `.pytest_cache/` was already in [backend/.gitignore](backend/.gitignore).
+3. **Configured pytest** in [pytest.ini](backend/pytest.ini): tests live in `backend/tests/`. Checked the configuration before writing any test: running pytest with an empty `tests/` folder read the config and exited with code 5, which means "no tests collected".
+4. **Wrote the tests** in [test_block_secrets.py](backend/tests/test_block_secrets.py): 34 test cases (parametrized) that send made-up tool calls to the hook and check the exit code (2 = blocked, 0 = allowed). They cover commands that print secrets, file writes with secrets (including the stricter README check), `git add` and `git commit` in a temporary git repository (so the result does not depend on your working folder), and bad input. They also check that a block message never repeats the secret. The fake secrets are built when the tests run, so the test file contains nothing the hook itself would block.
+5. **Ran them.** From `backend/` with the virtual environment active: all 34 passed.
+6. **Checked that the tests can fail.** The same tests were run against a dummy hook that allows everything: 19 failed and the 15 "allowed" cases passed. With the real hook again all 34 passed. This was done after the hook was written, not before, so it is a check of the tests, not true test-first.
+7. **How to run them:**
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+8. **Not covered.** The tests call the hook script directly. They do not prove that Claude Code itself runs the hook with the settings in [settings.json](.claude/settings.json); that was only seen live once (secrets hook step 6). There are still no tests for the API, indexing or answering code.
+
 ## Next steps
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
