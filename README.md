@@ -603,6 +603,36 @@ az containerapp update --name insur-rag-api --resource-group insu_rag_rg --remov
 
 While it is on, ask questions on the site, then look at the container app Log stream (error lines), the Application Insights Failures page, and Monitor, Alerts (the alert fires after a minute or two).
 
+### Failure drill results
+
+Steps taken during the drills, in order:
+
+1. **Alert state checked.** The alert `insur-rag-api-5xx-errors` had fired at 14:55 UTC (about 2 minutes after the failed requests) and then resolved itself. Alerts clear automatically when the failures stop, so it can show as Resolved when you look later. A second rule, `System Latency Alert`, had fired at 13:16 UTC during the slow drill. Neither rule has an action group, so no notification was sent.
+2. **Slow drill.** `SIMULATE_FAILURE=slow` was set on the container app and 8 questions were sent to `/api/ask`. All returned 200, taking 9.2 to 10.3 seconds each.
+3. **Error drill.** `SIMULATE_FAILURE=error` was set (new revision `insur-rag-api--0000003`) and 20 questions were sent. All 20 returned 502, and the container app metric Requests recorded 20 responses in the 5xx category in one minute.
+4. **Problem found: telemetry feedback loop.** The Azure Monitor exporter logs every upload ("Transmission succeeded") and those log lines are sent as telemetry too, about one item per second even when idle. They bury the real log lines and add ingestion cost. Planned fix: set the exporter's logger to WARNING in [ragapi.py](backend/api/ragapi.py). Not applied yet.
+5. **Still to do.** Create an action group (email) and attach it to both alert rules, switch the drill off with `--remove-env-vars SIMULATE_FAILURE`, and remove the drill function.
+
+## Spec Kit setup
+
+Steps taken to add GitHub Spec Kit (spec-driven development skills for Claude Code) to this project:
+
+1. **Tried the command you gave.** `uvx --from git+https://github.com/github/spec-kit.git specify init --here --ai claude`. It failed at once because `uvx` was not installed (it was not found in Git Bash or PowerShell).
+2. **Installed uv.** `pip install uv` installed uv 0.13.8, which includes `uvx`, in the Python Scripts folder that is already on the PATH. A terminal opened before this may need to be reopened.
+3. **Ran the command again.** `uvx` downloaded and built Spec Kit, but `specify init` rejected `--ai`: "No such option: --ai". This version of Spec Kit replaced `--ai` with `--integration`.
+4. **Checked the options.** `specify init --help` showed the new options, and that `--here` asks for confirmation when the folder is not empty unless `--force` is given. Before forcing, I checked that `.claude/`, `.specify/` and `CLAUDE.md` did not exist and that the git working tree was clean, so nothing of yours could be overwritten.
+5. **Ran the working command.**
+
+```powershell
+uvx --from git+https://github.com/github/spec-kit.git specify init --here --force --non-interactive --integration claude --script ps
+```
+
+   `--integration claude` replaces `--ai claude`, `--force` skips the confirmation, `--non-interactive` stops it asking questions, and `--script ps` picks the PowerShell scripts for Windows. It finished with exit code 0.
+6. **What it added** (both folders are new and not committed): `.claude/skills/` with the skills `speckit-constitution`, `speckit-specify`, `speckit-plan`, `speckit-tasks`, `speckit-implement`, `speckit-converge` and the optional `speckit-clarify`, `speckit-analyze` and `speckit-checklist`; and `.specify/` with templates, scripts, workflows and a constitution file (`.specify/memory/`). Nothing in the existing code or README was changed.
+7. **Next, in Claude Code from this folder:** run `/speckit-constitution` to set project principles, then `/speckit-specify`, `/speckit-plan`, `/speckit-tasks` and `/speckit-implement`. Spec Kit warns that `.claude/` can hold credentials for some agents, so consider adding it to `.gitignore`. I did not change `.gitignore`.
+
+8. **Added a CLAUDE.md.** The project had none. [CLAUDE.md](CLAUDE.md) in the project root is read by Claude Code at the start of every session. It holds: your working rules (log every step in the README, no code in the README, pip only, report honestly), the commands to run the project, a short architecture map, the Azure resource names, the traps found so far (index name `insurance-policies-v2`, `deploy.ps1` rotating the API key, Git Bash rewriting Azure resource paths, noisy SDK logging, the temporary `SIMULATE_FAILURE` drill, never printing secrets) and a pointer to Spec Kit. It does not repeat the README or hold project principles, which belong in the Spec Kit constitution. Update it when a rule or trap changes, and remove the drill note when the drill is removed.
+
 ## Next steps
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
