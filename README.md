@@ -758,11 +758,18 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - **Versioned "carry on" instruction:** the text that asks the model to continue moved out of the code into [continue_prompt_v1.py](backend/data/prompts/continue_prompt_v1.py), next to the system prompts. [prompts/__init__.py](backend/data/prompts/__init__.py) loads it with `load_continue_prompt`; the setting `CONTINUE_PROMPT_VERSION` picks a version (empty means the latest), and the span records `continue_prompt.version`. To change the wording, add `continue_prompt_v2.py`.
     - **Not confirmed with the real model:** how Azure `gpt-4.1-mini` actually continues a half-written JSON reply is unknown. Not live yet.
 
+34. **Timeouts, retries, fallbacks and a total time budget** (to-do item, now removed). Before this only library defaults applied. Each layer now has its own limit, and the endpoint has one budget above them. Retries and fallbacks happen only for transient errors (timeout, lost connection, 429, 5xx; see [utility/retry.py](backend/utility/retry.py)); a bad request, a wrong key, the content filter or a cut-off answer fails at once. Settings and defaults are in [.env.example](.env.example).
+    - **Chat model** ([insur_llm.py](backend/answering/insur_llm.py)): 25 s timeout, 1 client retry. If it still fails, the question is answered by the optional fallback deployment `AZURE_OPENAI_CHAT_FALLBACK_DEPLOYMENT`; the span records `llm.fallback_used`.
+    - **Question embedding** ([embeddings.py](backend/vector_embedding/embeddings.py)): 10 s timeout, 2 client retries, then the optional fallback deployment `AZURE_OPENAI_EMBEDDING_FALLBACK_DEPLOYMENT` (span `embedding.fallback_used`). It must be the same model as the primary, because another model gives vectors that do not match the index. Indexing keeps the old defaults.
+    - **AI Search** ([vector_store.py](backend/vector_embedding/vector_store.py)): the search client gets a 10 s connect and read timeout and 2 retries with backoff, and the whole retrieval step (embedding plus search) is run once more by a retry wrapper if it fails.
+    - **Endpoint** ([ragapi.py](backend/api/ragapi.py)): `/api/ask` has one budget of 60 s for the whole request and tries the request again (at most 2 attempts) only for transient errors while budget is left. Running out of budget returns 504, other failures 502 as before. The budget is the final limit, because the layers together can add up to more than 60 s.
+    - **Known limits:** when the budget ends, the endpoint stops waiting but the worker thread finishes by its own timeouts. A retry of the whole request repeats the model call, so it can cost twice. No fallback deployments exist yet, so both settings are empty. Not live yet.
+
 ## Next steps
 
 To do, one by one (delete each item when it is done):
 
-- Set an explicit timeout and retry count on the chat model.
+- Check the continuation and the fallbacks with the real Azure model (for example one question with `LLM_MAX_TOKENS=30`), since all of it was tested only against fake servers.
 
 Other open items:
 

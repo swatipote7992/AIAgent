@@ -1,3 +1,4 @@
+import logging
 import os
 from functools import lru_cache
 from pathlib import PureWindowsPath
@@ -14,9 +15,12 @@ from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
 from utility.continuation import AnswerBlockedError, AnswerTruncatedError, blocked_message, continue_reply
 from utility.finish_reason_handler import FinishReasonHandler
+from utility.retry import call_with_retry, is_transient
 
 # .env wins over variables already set in the shell
 load_dotenv(override=True)
+
+log = logging.getLogger("insur_llm")
 
 
 class Reply(BaseModel):
@@ -35,8 +39,13 @@ def get_cached_retriever():
 
 @traced("retrieval")
 def retrieve_chunks(question: str):
-    # Find the chunks relevant to the question in Azure AI Search.
-    chunks = get_cached_retriever().invoke(question)
+    # Find the chunks relevant to the question in Azure AI Search. The search client has its own timeout and retries;
+    # this wrapper runs the whole step (embedding the question plus the search) once more if it fails with a transient error.
+    chunks = call_with_retry(
+        lambda: get_cached_retriever().invoke(question),
+        retries=int(os.environ.get("RETRIEVAL_MAX_RETRIES", "1")),
+        what="retrieval",
+    )
     # Only a count and the policy file names go on the span, never the chunk text.
     # The stored source can be a full local path, so keep just the file name.
     span = trace.get_current_span()
@@ -67,12 +76,15 @@ def build_prompt(chunks):
     return prompt, context
 
 
-def build_llm() -> AzureChatOpenAI:
-    # The chat model, built for every question from the settings in .env.
+def build_llm(deployment: str) -> AzureChatOpenAI:
+    # The chat model for one deployment, built for every question from the settings in .env.
     max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "1000"))
     trace.get_current_span().set_attribute("gen_ai.request.max_tokens", max_tokens)
     return AzureChatOpenAI(
-        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
+        azure_deployment=deployment,
+        # Seconds to wait for one attempt, and how often the client retries a timeout, a 429 or a 5xx error.
+        timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "25")),
+        max_retries=int(os.environ.get("LLM_MAX_RETRIES", "1")),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
@@ -144,17 +156,32 @@ def invoke_with_continuation(
         )
 
 
+def invoke_with_fallback(prompt, context: str, question: str, handler):
+    # Answer with the primary chat deployment. If it keeps failing with a transient error (after the client's own
+    # retries), answer with the fallback deployment, if AZURE_OPENAI_CHAT_FALLBACK_DEPLOYMENT is set.
+    # Returns the reply, the tokens of a cut-off call, and the model that answered.
+    deployments = [os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini")]
+    fallback = os.environ.get("AZURE_OPENAI_CHAT_FALLBACK_DEPLOYMENT", "").strip()
+    if fallback:
+        deployments.append(fallback)
+    for index, deployment in enumerate(deployments):
+        llm = build_llm(deployment)
+        try:
+            reply, cut_input, cut_output = invoke_with_continuation(llm, prompt, context, question, handler)
+            return reply, cut_input, cut_output, llm
+        except Exception as error:
+            if index == len(deployments) - 1 or not is_transient(error):
+                raise
+            log.warning("chat deployment failed (%s), using the fallback deployment", type(error).__name__)
+            trace.get_current_span().set_attribute("llm.fallback_used", True)
+
+
 @traced("llm_generation")
 def generate_reply(prompt, context: str, question: str) -> Reply:
-    llm = build_llm()
-    handler = (
-        FinishReasonHandler()
-    )  # puts the finish reason of each model call on the span
+    handler = FinishReasonHandler()  # puts the finish reason of each model call on the span
     # The callback counts the tokens of every call that returns normally.
     with get_usage_metadata_callback() as usage:
-        reply, cut_input, cut_output = invoke_with_continuation(
-            llm, prompt, context, question, handler
-        )
+        reply, cut_input, cut_output, llm = invoke_with_fallback(prompt, context, question, handler)
     record_llm_attributes(llm, usage, cut_input, cut_output)
     return reply
 
