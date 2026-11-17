@@ -41,6 +41,19 @@ dependencies
 | order by timestamp desc
 ```
 
+Finish reason per question (`stop` is a normal end, `length` means the `LLM_MAX_TOKENS` cap cut the reply). Only questions answered after the finish-reason change was released have a value:
+
+```kusto
+dependencies
+| where name == "llm_generation" and timestamp > ago(24h)
+| extend finish_reason = tostring(customDimensions["gen_ai.response.finish_reasons"]), max_tokens = toint(customDimensions["gen_ai.request.max_tokens"]), continuations = toint(customDimensions["llm.continuations"])
+| extend output_tokens = toint(coalesce(tostring(customDimensions["gen_ai.usage.output_tokens"]), tostring(customDimensions["llm.output_tokens"])))
+| project timestamp, finish_reason, continuations, output_tokens, max_tokens, success, duration
+| order by timestamp desc
+```
+
+Count by finish reason: replace the last two lines with `| summarize n = count() by finish_reason`. A list such as `["length","stop"]` is an answer that was cut once and then continued (`continuations` = 1). Rows that stay `length` after 3 continuations show `success == false`.
+
 The same queries from the command line:
 
 ```powershell

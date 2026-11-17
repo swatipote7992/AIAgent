@@ -6,11 +6,14 @@ from dotenv import load_dotenv
 from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
-from pydantic import BaseModel, Field
+from openai import LengthFinishReasonError
+from pydantic import BaseModel, Field, ValidationError
 from answering.retrieval import get_retriever
 from observability.tracing import traced
-from data.prompts import load_system_prompt
+from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
+from utility.continuation import AnswerTruncatedError, continue_reply
+from utility.finish_reason_handler import FinishReasonHandler
 
 # .env wins over variables already set in the shell
 load_dotenv(override=True)
@@ -64,32 +67,92 @@ def build_prompt(chunks):
     return prompt, context
 
 
-@traced("llm_generation")
-def generate_reply(prompt, context: str, question: str) -> Reply:
-    # Chat model, built for every question.
-    llm = AzureChatOpenAI(
+def build_llm() -> AzureChatOpenAI:
+    # The chat model, built for every question from the settings in .env.
+    max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "1000"))
+    trace.get_current_span().set_attribute("gen_ai.request.max_tokens", max_tokens)
+    return AzureChatOpenAI(
         azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         temperature=0,
-        # Upper limit for the reply (answer plus follow-ups). Too low a value cuts the structured reply and the call fails.
-        max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "1000")),
+        # Upper limit for the reply (answer plus follow-ups). A reply cut by it is continued, see invoke_with_continuation.
+        max_tokens=max_tokens,
     )
-    chain = prompt | llm.with_structured_output(Reply)
 
-    # The callback counts the tokens the model used; the numbers go on the span, never any text.
-    with get_usage_metadata_callback() as usage:
-        reply = chain.invoke({"context": context, "question": question})
 
+def record_llm_attributes(llm, usage, cut_input: int, cut_output: int) -> None:
+    # Names and token counts only, never any text. The standard OpenTelemetry GenAI names, so tools such as
+    # Microsoft Foundry's Traces page can recognise the call.
     span = trace.get_current_span()
-    # The standard OpenTelemetry GenAI names, so tools such as Microsoft Foundry's Traces page can recognise the call.
     span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.provider.name", "azure.ai.openai")
     span.set_attribute("gen_ai.request.model", llm.deployment_name)
-    for stats in usage.usage_metadata.values():
-        span.set_attribute("gen_ai.usage.input_tokens", stats.get("input_tokens", 0))
-        span.set_attribute("gen_ai.usage.output_tokens", stats.get("output_tokens", 0))
+    span.set_attribute(
+        "gen_ai.usage.input_tokens",
+        cut_input
+        + sum(s.get("input_tokens", 0) for s in usage.usage_metadata.values()),
+    )
+    span.set_attribute(
+        "gen_ai.usage.output_tokens",
+        cut_output
+        + sum(s.get("output_tokens", 0) for s in usage.usage_metadata.values()),
+    )
+
+
+def invoke_with_continuation(
+    llm, prompt, context: str, question: str, handler
+) -> tuple[Reply, int, int]:
+    # Ask the model for the structured reply. If the token limit cuts it, send the partial text back as an AI message
+    # and ask the model to carry on, at most MAX_CONTINUATIONS times (see utility/continuation.py).
+    # Returns the reply plus the input and output tokens of the call that was cut (the library raises, so the
+    # usage callback never sees them); both are 0 when nothing was cut.
+    inputs = {"context": context, "question": question}
+    try:
+        reply = (prompt | llm.with_structured_output(Reply)).invoke(
+            inputs, config={"callbacks": [handler]}
+        )
+        return reply, 0, 0
+    except LengthFinishReasonError as cut:
+        handler.record("length")
+        usage = cut.completion.usage
+        partial = cut.completion.choices[0].message.content or ""
+        # The instruction lives in backend/data/prompts/continue_prompt_v<N>.py
+        instruction, version = load_continue_prompt()
+        trace.get_current_span().set_attribute("continue_prompt.version", version)
+        text, _ = continue_reply(
+            llm,
+            prompt.format_messages(**inputs),
+            partial,
+            instruction,
+            handler,
+        )
+        try:
+            reply = Reply.model_validate_json(text.strip())
+        except ValidationError as error:
+            raise AnswerTruncatedError(
+                "The continued answer could not be joined into a valid reply."
+            ) from error
+        return (
+            reply,
+            (usage.prompt_tokens if usage else 0),
+            (usage.completion_tokens if usage else 0),
+        )
+
+
+@traced("llm_generation")
+def generate_reply(prompt, context: str, question: str) -> Reply:
+    llm = build_llm()
+    handler = (
+        FinishReasonHandler()
+    )  # puts the finish reason of each model call on the span
+    # The callback counts the tokens of every call that returns normally.
+    with get_usage_metadata_callback() as usage:
+        reply, cut_input, cut_output = invoke_with_continuation(
+            llm, prompt, context, question, handler
+        )
+    record_llm_attributes(llm, usage, cut_input, cut_output)
     return reply
 
 
