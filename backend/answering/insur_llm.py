@@ -6,13 +6,13 @@ from dotenv import load_dotenv
 from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
-from openai import LengthFinishReasonError
+from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, Field, ValidationError
 from answering.retrieval import get_retriever
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
-from utility.continuation import AnswerTruncatedError, continue_reply
+from utility.continuation import AnswerBlockedError, AnswerTruncatedError, blocked_message, continue_reply
 from utility.finish_reason_handler import FinishReasonHandler
 
 # .env wins over variables already set in the shell
@@ -114,8 +114,11 @@ def invoke_with_continuation(
             inputs, config={"callbacks": [handler]}
         )
         return reply, 0, 0
+    except ContentFilterFinishReasonError as blocked:
+        # The handler has already recorded "content_filter" (on_llm_error); turn it into a clear error.
+        raise AnswerBlockedError(blocked_message("content_filter")) from blocked
     except LengthFinishReasonError as cut:
-        handler.record("length")
+        # The handler has already recorded "length" (on_llm_error).
         usage = cut.completion.usage
         partial = cut.completion.choices[0].message.content or ""
         # The instruction lives in backend/data/prompts/continue_prompt_v<N>.py

@@ -52,7 +52,7 @@ dependencies
 | order by timestamp desc
 ```
 
-Count by finish reason: replace the last two lines with `| summarize n = count() by finish_reason`. A list such as `["length","stop"]` is an answer that was cut once and then continued (`continuations` = 1). Rows that stay `length` after 3 continuations show `success == false`.
+Count by finish reason: replace the last two lines with `| summarize n = count() by finish_reason`. A list such as `["length","stop"]` is an answer that was cut once and then continued (`continuations` = 1). Rows that stay `length` after 3 continuations show `success == false`. Other values you may see: `content_filter` (stopped by the content filter) and `error:<exception class>` (the call failed, for example `error:OpenAIAPIError`); both also show `success == false`.
 
 The same queries from the command line:
 
