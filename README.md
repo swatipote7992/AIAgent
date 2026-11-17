@@ -547,8 +547,218 @@ Five more mock policies were added to `backend/data/`, in the same format and se
 
 The three example questions on the frontend start screen still asked about the old documents (smoker BMI, flood damage, claim time). They now ask about the car insurance data: BMW excess for a 22-year-old, Tesla battery damage cover and the Volvo courtesy car period. They are set in [App.tsx](frontend/src/App.tsx). The start screen text now says "car insurance policy documents".
 
+### Monitoring built into the API
+
+[ragapi.py](backend/api/ragapi.py) now writes one log line for every question: how long it took in milliseconds, the length of the question (the question text itself is not logged), how many chunks were found and which source files they came from. Failures are logged as errors with the reason. A new `GET /health` address returns `{"status": "ok"}` for uptime checks and needs no key. On Azure the lines show up in the container app log stream and in Log Analytics (see below for how to read them). It only takes effect after the backend is redeployed with [deploy.ps1](deploy.ps1).
+
+Read the logs from the terminal:
+
+```powershell
+az containerapp logs show --name insur-rag-api --resource-group insu_rag_rg --follow
+```
+
+Other places to look in the portal: the container app's Metrics (requests, replicas, restarts), the Azure OpenAI resource `insuragopenai` (tokens and throttling), the AI Search service `insuragservice` (document count and queries) and Cost Management.
+
+### Azure Monitor and OpenTelemetry
+
+The API is connected to Azure Monitor through OpenTelemetry:
+
+1. **Resource.** An Application Insights resource `insur-rag-insights` was created in `insu_rag_rg` (UK South). It is workspace-based and uses the same Log Analytics workspace as the Container Apps environment, so the container logs and the telemetry are in one place. [deploy.ps1](deploy.ps1) creates it if it is missing and reuses it otherwise.
+2. **Package.** `azure-monitor-opentelemetry` was added to [requirements.txt](backend/requirements.txt).
+3. **Startup.** [ragapi.py](backend/api/ragapi.py) starts the Azure Monitor exporter before the app is created, but only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set. Locally it is not set, so nothing is sent.
+4. **Deploy.** [deploy.ps1](deploy.ps1) reads the connection string from the resource and passes it to the container app as a secret.
+
+This gives request traces for `/api/ask`, the log lines described above, and calls made to other services. Look at it in the portal under `insur-rag-insights`: Live metrics, Transaction search, Failures, Performance and Application map.
+
+### Health and readiness checks
+
+Two checks were added to [ragapi.py](backend/api/ragapi.py), neither needs the API key:
+
+- `GET /health` (liveness): the process is up. It checks no other service, so an Azure outage never makes Azure restart a healthy container.
+- `GET /ready` (readiness): the AI Search index can be reached and has documents. It returns `{"status": "ready", "documents": N}`, or 503 if the index is unreachable or empty. It does not call Azure OpenAI (cost and rate limits), it never creates a missing index, and it caches the result for 10 seconds. Checked locally against `insurance-policies-v2`: 200 with 46 documents.
+
+[deploy.ps1](deploy.ps1) now sets Container Apps probes: liveness on `/health` every 30 seconds, readiness on `/ready` every 15 seconds, and a startup probe on `/ready` (up to about 2.5 minutes), so a cold replica gets no traffic until it can answer. The Azure SDK's per-request INFO logging is turned down so the probes do not flood the logs.
+
+Applied to the live backend (revision `insur-rag-api--0000001`): `/health` returns `{"status": "ok"}` and `/ready` returns 200 with 46 documents. The first attempt to apply the probes failed because the `az` YAML reader rejects pretty-printed JSON; the fix is compact JSON without a byte-order mark, now in [deploy.ps1](deploy.ps1).
+
+To change the probes on the live app without a full deploy (which would also issue a new `API_KEY`), rebuild the image and update the container app only.
+
+### Failure drill and alert (temporary)
+
+To see what a failing service looks like in the logs and in Azure Monitor, [ragapi.py](backend/api/ragapi.py) has a temporary switch that does nothing unless the environment variable `SIMULATE_FAILURE` is set on the container app: `error` makes every question fail with a 502 (logged as an error, with the exception in Application Insights) and `slow` adds 8 seconds to every answer. The switch is the function `simulate_failure_drill()`, called at the start of `ask()`. Remove the function and its call when the drill is over.
+
+An alert rule `insur-rag-api-5xx-errors` was created on the container app: it fires when the app returns any HTTP 5xx response within 5 minutes, checked every minute, severity 2. It has no action group yet, so it only appears in Monitor, Alerts and sends no email.
+
+Turn the failure on (this makes a new revision, about a minute):
+
+```powershell
+az containerapp update --name insur-rag-api --resource-group insu_rag_rg --set-env-vars SIMULATE_FAILURE=error
+```
+
+Turn it off again:
+
+```powershell
+az containerapp update --name insur-rag-api --resource-group insu_rag_rg --remove-env-vars SIMULATE_FAILURE
+```
+
+While it is on, ask questions on the site, then look at the container app Log stream (error lines), the Application Insights Failures page, and Monitor, Alerts (the alert fires after a minute or two).
+
+### Failure drill results
+
+Steps taken during the drills, in order:
+
+1. **Alert state checked.** The alert `insur-rag-api-5xx-errors` had fired at 14:55 UTC (about 2 minutes after the failed requests) and then resolved itself. Alerts clear automatically when the failures stop, so it can show as Resolved when you look later. A second rule, `System Latency Alert`, had fired at 13:16 UTC during the slow drill. Neither rule has an action group, so no notification was sent.
+2. **Slow drill.** `SIMULATE_FAILURE=slow` was set on the container app and 8 questions were sent to `/api/ask`. All returned 200, taking 9.2 to 10.3 seconds each.
+3. **Error drill.** `SIMULATE_FAILURE=error` was set (new revision `insur-rag-api--0000003`) and 20 questions were sent. All 20 returned 502, and the container app metric Requests recorded 20 responses in the 5xx category in one minute.
+4. **Problem found: telemetry feedback loop.** The Azure Monitor exporter logs every upload ("Transmission succeeded") and those log lines are sent as telemetry too, about one item per second even when idle. They bury the real log lines and add ingestion cost. Planned fix: set the exporter's logger to WARNING in [ragapi.py](backend/api/ragapi.py). Not applied yet.
+5. **Still to do.** Create an action group (email) and attach it to both alert rules, switch the drill off with `--remove-env-vars SIMULATE_FAILURE`, and remove the drill function.
+
+## Spec Kit setup
+
+Steps taken to add GitHub Spec Kit (spec-driven development skills for Claude Code) to this project:
+
+1. **Tried the command you gave.** `uvx --from git+https://github.com/github/spec-kit.git specify init --here --ai claude`. It failed at once because `uvx` was not installed (it was not found in Git Bash or PowerShell).
+2. **Installed uv.** `pip install uv` installed uv 0.13.8, which includes `uvx`, in the Python Scripts folder that is already on the PATH. A terminal opened before this may need to be reopened.
+3. **Ran the command again.** `uvx` downloaded and built Spec Kit, but `specify init` rejected `--ai`: "No such option: --ai". This version of Spec Kit replaced `--ai` with `--integration`.
+4. **Checked the options.** `specify init --help` showed the new options, and that `--here` asks for confirmation when the folder is not empty unless `--force` is given. Before forcing, I checked that `.claude/`, `.specify/` and `CLAUDE.md` did not exist and that the git working tree was clean, so nothing of yours could be overwritten.
+5. **Ran the working command.**
+
+```powershell
+uvx --from git+https://github.com/github/spec-kit.git specify init --here --force --non-interactive --integration claude --script ps
+```
+
+   `--integration claude` replaces `--ai claude`, `--force` skips the confirmation, `--non-interactive` stops it asking questions, and `--script ps` picks the PowerShell scripts for Windows. It finished with exit code 0.
+6. **What it added** (both folders are new and not committed): `.claude/skills/` with the skills `speckit-constitution`, `speckit-specify`, `speckit-plan`, `speckit-tasks`, `speckit-implement`, `speckit-converge` and the optional `speckit-clarify`, `speckit-analyze` and `speckit-checklist`; and `.specify/` with templates, scripts, workflows and a constitution file (`.specify/memory/`). Nothing in the existing code or README was changed.
+7. **Next, in Claude Code from this folder:** run `/speckit-constitution` to set project principles, then `/speckit-specify`, `/speckit-plan`, `/speckit-tasks` and `/speckit-implement`. Spec Kit warns that `.claude/` can hold credentials for some agents, so consider adding it to `.gitignore`. I did not change `.gitignore`.
+
+8. **Added a CLAUDE.md.** The project had none. [CLAUDE.md](CLAUDE.md) in the project root is read by Claude Code at the start of every session. It holds: your working rules (log every step in the README, no code in the README, pip only, report honestly), the commands to run the project, a short architecture map, the Azure resource names, the traps found so far (index name `insurance-policies-v2`, `deploy.ps1` rotating the API key, Git Bash rewriting Azure resource paths, noisy SDK logging, the temporary `SIMULATE_FAILURE` drill, never printing secrets) and a pointer to Spec Kit. It does not repeat the README or hold project principles, which belong in the Spec Kit constitution. Update it when a rule or trap changes, and remove the drill note when the drill is removed.
+
+9. **Ran `/speckit-constitution`.** The constitution at [.specify/memory/constitution.md](.specify/memory/constitution.md) was still the empty template, so it was filled in as version 1.0.0 (ratified 2026-11-16) from the principles you listed. It has nine principles: test-first, FastAPI conventions, React and TypeScript conventions, secrets never printed or logged, no credentials in git, pinned pip dependencies, every step documented in the README, honest reporting and deployment safety. It also has sections for technology and security constraints (including the known limit that the shared API key sits in the frontend bundle) and for the development workflow and quality gates, plus governance with the amendment and versioning rules. No extension hooks were registered, so none ran. The file starts with a temporary "Sync Impact Report" comment to remove before committing. Open items it records: there are no automated tests yet, and the temporary failure drill must be removed after the monitoring drills.
+
+## Secrets hook (Claude Code)
+
+Steps taken to add a hook that stops Claude Code from committing, printing or writing secrets. It enforces constitution principles IV (secrets never printed or logged) and V (no credentials in git). A hook is run by Claude Code itself before a tool call, so it cannot be skipped the way a written rule can.
+
+1. **Checked what existed.** The project had no agents, rules or hooks, only the Spec Kit skills in `.claude/skills/`, and the user settings had no hooks either.
+2. **Decided what to block.** A PreToolUse hook on the shell tools (Bash and PowerShell) and on the file tools (Write, Edit, MultiEdit). The reason is that a deployment token was printed once in command output earlier in this project.
+3. **Wrote the hook script** [block_secrets.py](.claude/hooks/block_secrets.py). Claude Code passes the tool call to it as JSON; an exit code of 2 blocks the call and shows the reason to Claude. It never prints the secret, only which rule was hit. It blocks:
+   - `git add` of `.env` or anything under `.claude/`, and a bulk `git add` (`.`, `-A`, `--all`) while untracked `.env` or `.claude/` files exist;
+   - `git commit` when the staged files include `.env` or `.claude/`, or when the staged changes add something that looks like a secret;
+   - commands that print secrets: reading `.env`, listing environment variables, echoing a variable that holds a key or token, `az` commands that return keys (`list-keys`, `secret show` or `secret list`, `staticwebapp secrets list`) and `--show-secrets`;
+   - file writes that contain a connection string, a private key, a known token format, or a long value assigned to a name such as key, token, secret or password. For `README.md` the check is stricter and also catches any long hex or base64-like string.
+   - Allowed on purpose: writing `.env`, writing `.env.example`, reading `.env.example`, and values with placeholders such as `<your key>`.
+4. **Registered it** in [settings.json](.claude/settings.json), which lists the hook under PreToolUse for the five tools above. It runs with Python from the PATH.
+5. **Tested it.** A test script in the session scratchpad (not part of the project) fed the hook 23 made-up inputs, with the fake secrets built at run time. All 23 gave the expected result: 15 blocked and 8 allowed. This was a test of the script only; no real `git commit` has been run through it yet.
+6. **Seen working live.** The hook was already active in the same session and blocked Claude's own first test file, because it contained a fake connection string. The file was rewritten to build the fake values at run time.
+7. **Known limits.**
+   - The hook cannot see commands you type in your own terminal, only Claude's.
+   - It is a safety net, not a guarantee: a secret printed by a route the hook does not list is not caught.
+   - A legitimate command can be blocked by mistake (for example `az containerapp secret list` with a `--query` that returns only names). If that happens, loosen the matching rule in the script.
+   - `.claude/` is untracked and the hook blocks `git add` of it, including the hook's own files. Review `.claude/` first (principle V), then add the files from your own terminal.
+8. **Not done.** The second hook (asking before commands that change the live app, such as `deploy.ps1`) and the optional rule files were not created.
+
+### Tests for the secrets hook (pytest)
+
+Steps taken to add the project's first automated tests, for the hook above. Choosing pytest over the built-in `unittest` was your decision: it is the usual runner for FastAPI, and the backend tests that principle I requires will use it too.
+
+1. **Installed pytest** into the backend virtual environment: `pip install pytest` gave version 9.2.0, and `pip check` reported no broken requirements.
+2. **Pinned it, kept out of the Azure image.** [requirements-dev.txt](backend/requirements-dev.txt) includes `requirements.txt` and adds the exact pytest version. The `Dockerfile` installs only `requirements.txt`, so pytest is not in the deployed image. [.dockerignore](backend/.dockerignore) now also leaves out `tests`, `.pytest_cache`, `requirements-dev.txt` and `pytest.ini`, so the tests are not copied into the image either. `.pytest_cache/` was already in [backend/.gitignore](backend/.gitignore).
+3. **Configured pytest** in [pytest.ini](backend/pytest.ini): tests live in `backend/tests/`. Checked the configuration before writing any test: running pytest with an empty `tests/` folder read the config and exited with code 5, which means "no tests collected".
+4. **Wrote the tests** in [test_block_secrets.py](backend/tests/test_block_secrets.py): 34 test cases (parametrized) that send made-up tool calls to the hook and check the exit code (2 = blocked, 0 = allowed). They cover commands that print secrets, file writes with secrets (including the stricter README check), `git add` and `git commit` in a temporary git repository (so the result does not depend on your working folder), and bad input. They also check that a block message never repeats the secret. The fake secrets are built when the tests run, so the test file contains nothing the hook itself would block.
+5. **Ran them.** From `backend/` with the virtual environment active: all 34 passed.
+6. **Checked that the tests can fail.** The same tests were run against a dummy hook that allows everything: 19 failed and the 15 "allowed" cases passed. With the real hook again all 34 passed. This was done after the hook was written, not before, so it is a check of the tests, not true test-first.
+7. **How to run them:**
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+8. **Not covered.** The tests call the hook script directly. They do not prove that Claude Code itself runs the hook with the settings in [settings.json](.claude/settings.json); that was only seen live once (secrets hook step 6). There are still no tests for the API, indexing or answering code.
+
+## Distributed tracing
+
+Steps taken to see where the time goes for one question. Before this, the API wrote one log line per question with the total time. Now each question is one trace with a timed span for every stage, so a slow answer can be traced to retrieval, the prompt or the model. You made the first code change (the helper file) yourself; the rest was made one edit at a time with your approval.
+
+1. **Goal.** One trace per question with a child span per stage, attributes that help to find a slow or expensive question, and later percentile times (p50, p95, p99) per stage plus alerts. Spans never hold question text, answer text, chunk text or secrets.
+2. **Wrote the helper** [tracing.py](backend/observability/tracing.py). It has one decorator, `traced("name")`, which runs a function inside a span with that name; the span's duration is the time of the function. If the function fails, the span is marked as an error and keeps only the exception's type name, not its message, because a message could contain a secret. The folder [backend/observability/](backend/observability/) also has leftover compiled files from the earlier logging feature that was reverted; they are not used.
+3. **Split the answering code into stages** in [insur_llm.py](backend/answering/insur_llm.py). `ask_llm` used to do everything in one function. It now calls three small functions in order, each with its own span: `retrieval` (search in Azure AI Search), `prompt` (join the chunks into the context and build the prompt) and `llm_generation` (create the chat model and get the answer). `ask_llm` itself is also a span and is the parent of the three. The answer returned to the API did not change.
+4. **Added attributes** (numbers and names only):
+   - on `retrieval`: `rag.chunks`, the number of chunks found;
+   - on `llm_generation`: the model name and the input and output token counts, counted with LangChain's usage callback. They were first named `llm.model`, `llm.input_tokens` and `llm.output_tokens`; step 19 replaced them with the standard `gen_ai.*` names and step 21 removed the old ones.
+5. **Added a span for embedding the question** in [embeddings.py](backend/vector_embedding/embeddings.py). A small subclass of the embedding model wraps only the query embedding in an `embedding` span, so it shows up under `retrieval`. Indexing is not affected because it embeds documents, not queries.
+6. **Expected shape of one trace:** `ask_llm` containing `retrieval` (which contains `embedding`), `prompt` and `llm_generation`.
+7. **Checked offline.** The helper returns the wrapped function's result. The embedding subclass is the model that `get_embedding_model()` returns, and with a fake parent call it produces an `embedding` span whose parent is the surrounding span. The model's deployment name is available for the attribute. `insur_llm.py` imports and has all four functions.
+8. **Deployed with a targeted update, not `deploy.ps1`.** `az acr build` of `backend/` as image `insur-rag-api` with a new tag (`trace-20261117112051`) succeeded, then `az containerapp update` on `insur-rag-api` to that image succeeded (exit code 0, revision `insur-rag-api--0000005`). The API key was not changed, and `SIMULATE_FAILURE` is not among the app's settings. Afterwards `/health` returned ok and `/ready` returned ready with 46 documents.
+9. **Asked questions from the frontend.** Sending a question from Claude's shell needs the API key, and the secrets hook blocked reading it, so the questions were asked from the frontend instead.
+10. **Looked at the traces in Application Insights** (`insur-rag-insights`): queried the `requests` and `dependencies` tables with `az monitor app-insights query` to check that each question is one trace with the expected parent and child spans and that the attributes are present.
+11. **How to look at it in the portal:** Application Insights, Transaction search, open a `POST /api/ask` request for the end-to-end view; Application map for the whole app; Logs for a query on the `dependencies` table grouped by span name.
+12. **Switched off FastAPI's own telemetry** in [ragapi.py](backend/api/ragapi.py) (extra spans and exception logs), because our stage spans already give the timing and exception text could carry secrets. It was first tested offline with a failing request carrying a fake marker in the error message, and no span held the marker. The change was deployed with the same targeted build and update as before (a new revision), then `/health` and `/ready` were checked.
+13. **Sampling.** Read the Azure Monitor package's code: with no sampler setting it uses a rate limit of about 5 traces per second, far above this app's traffic. No change was made and it was not tested under heavy load.
+14. **Percentiles.** Ran the p50, p95 and p99 query per span name. It works, but with so few questions the numbers are not meaningful yet.
+15. **Created a p95 alert** on `insur-rag-insights` from an ARM template: it fires when the p95 of the `llm_generation` span is above 5 seconds over 15 minutes, checked every 5 minutes. It has no action group, so it only shows in Azure Monitor, Alerts and sends no message. You chose not to create a new action group or install a CLI extension, so the template is deployed with the built-in `az deployment group create`.
+16. **Created a workbook** named `insur-rag-latency` on `insur-rag-insights` from an ARM template: a percentile table per stage, a p95-over-time chart and a tokens table. Deployment succeeded; it was not opened in the portal.
+17. **Saved the commands and templates** in [scripts.md](scripts.md): the targeted deploy, the KQL queries, the alert and workbook templates and the offline failing-request check.
+18. **Tried to see the traces in Microsoft Foundry.** The Foundry project's Traces page was empty. Findings: the project already had an Application Insights connection to a different resource (`inu_rag_insights`, which has had no telemetry), and the app sends its traces to `insur-rag-insights`; the app also calls its own Azure OpenAI resource, not the Foundry project. Replacing the Foundry connection was suggested as the safe option (it removes only the connection, not the resource); whether it was done is not recorded here. The spans also had none of the standard GenAI attributes (`gen_ai.*`), which Foundry's Traces page is expected to read.
+19. **Added the standard GenAI attributes** to the `llm_generation` span in [insur_llm.py](backend/answering/insur_llm.py): operation name, provider name, request model and the input and output token counts, next to the existing `llm.*` ones. Names and numbers only. The file imports; it was deployed with the targeted build and update (a new revision) and `/health` and `/ready` were checked. Whether Foundry now shows the traces has not been verified.
+20. **Moved the token queries to the new names.** The tokens table in the `insur-rag-latency` workbook and the token query in [scripts.md](scripts.md) now read `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`, falling back to the old names so spans recorded before the change still count. Checked on live data: both kinds of spans returned token counts. The workbook was redeployed from the updated template (same ID, so it was updated, not duplicated).
+21. **Removed the old `llm.*` attributes** from [insur_llm.py](backend/answering/insur_llm.py), keeping only the `gen_ai.*` ones, and deployed with the targeted build and update (a new revision). `/health` and `/ready` were checked. The removal was not yet confirmed on a new question in Application Insights.
+22. **Added three more attributes** (names, counts and lengths only): `question.chars` on `ask_llm` (the length of the question, never its text), `rag.sources` on `retrieval` (the policy file names found, reduced to the file name because the stored source can be a full local path), and on the `embedding` span the operation name, provider and embedding model name. Files: [insur_llm.py](backend/answering/insur_llm.py) and [embeddings.py](backend/vector_embedding/embeddings.py). Checked offline with fake data, including a fake Windows path with a user name: only file names came out, and no question, chunk or answer text appeared on any span. Deployed with the targeted build and update and `/health` and `/ready` were checked. Not yet confirmed on a new question in Application Insights.
+23. **Still to do.** An action group with a receiver so alerts send a message (the existing 5xx and latency alerts also have none), check the alert and workbook in the portal, and re-run the percentiles once there are enough questions. Not applicable to this app: cache hit or miss and time to first token (no cache, no streaming).
+
+24. **Question: how to track token usage, model costs and overall spend?** Answered in words only, nothing was changed or run. What exists already: the chat token counts are on the `llm_generation` span as `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` (see step 19), and the `insur-rag-latency` workbook has a tokens table. Gaps found: the `embedding` span has no token count, indexing runs are not measured, and nothing turns tokens into money. Proposed order: (a) Azure Cost Management on `insu_rag_rg` for the real bill, with a budget and an alert; (b) Azure OpenAI metrics (processed tokens per deployment) as the source that does not depend on our code; (c) a KQL query in the workbook that multiplies the span token counts by the current price per model, with the prices kept in the query and checked against the Azure price list; (d) a token count on the `embedding` span; (e) a daily token cap or alert. Not verified in Azure.
+25. **Moved the system prompt into a versioned file.** It used to be a string inside `build_prompt` in [insur_llm.py](backend/answering/insur_llm.py). It now lives in [sys_prompt_v1.py](backend/prompts/sys_prompt_v1.py), with the same wording as before. First I made it a text file (`prompts/rag_answer/v1.txt`); you asked for a file named `sys_prompt_v1.py`, so I replaced that with the Python module and deleted the text file.
+    - **Loader:** [prompts/__init__.py](backend/prompts/__init__.py) finds all `sys_prompt_v<N>.py` files. It uses the version in the environment variable `SYS_PROMPT_VERSION` if set, otherwise the highest number. An unknown version raises an error.
+    - **Tracing:** the `prompt` span now has a `prompt.version` attribute (a name only, never the text), so answers and token counts can be compared per version.
+    - **How to change the prompt:** add `sys_prompt_v2.py` next to v1 and leave v1 untouched. To go back, set `SYS_PROMPT_VERSION=v1`.
+    - **Checked offline:** the loader returns v1 with the `{context}` placeholder, the template has the inputs `context` and `question`, an unknown version fails clearly, and the existing pytest tests still pass. **Not done:** no real question was asked and nothing was deployed, so the Azure app still runs the old inline prompt. The Dockerfile copies the whole `backend/` folder, so the new folder will be included in the next targeted build.
+26. **Moved the prompts folder into `backend/data/`** at your request, so the prompt is now [sys_prompt_v1.py](backend/data/prompts/sys_prompt_v1.py) and the loader is [prompts/__init__.py](backend/data/prompts/__init__.py). [insur_llm.py](backend/answering/insur_llm.py) imports it from `data.prompts`, and the loader imports the versions with a relative import. Everything in step 25 about versions, `SYS_PROMPT_VERSION` and `prompt.version` still applies; the old `backend/prompts/` folder is gone, so the links in step 25 are out of date.
+    - **Indexing is not affected:** [ragindexing.py](backend/indexing/ragindexing.py) only reads `*.pdf` directly inside `backend/data/`, and the 9 PDFs are still found.
+    - **Mistake and fix:** my move command did not move anything (`git mv -k` skips untracked files but reports success) and the next command deleted the original folder. I rewrote both files with the same content. They are untracked, so git could not have restored them.
+    - **Checked offline:** the loader returns v1, the template has `context` and `question`, an unknown version fails clearly, 34 pytest tests pass. Not deployed.
+27. **Question: do we use few-shot prompting?** No. [sys_prompt_v1.py](backend/data/prompts/sys_prompt_v1.py) is zero-shot (instructions only, no example question and answer pairs). The `Reply` schema in [insur_llm.py](backend/answering/insur_llm.py) only fixes the output shape, and the retrieved chunks are source material, not examples. Possible gain from a few short fictional examples (citation format, "I don't know" with no follow-ups, follow-up quality) against a cost of extra input tokens on every question. Suggested way to try it: a `sys_prompt_v2.py` and a comparison by `prompt.version` on the same questions. Nothing was changed.
+28. **Implemented few-shot prompting as version 2.** New file [sys_prompt_v2.py](backend/data/prompts/sys_prompt_v2.py): the same rules as v1 plus three short made-up examples with a fictional insurer and file name (answer found with a citation; answer only partly found; answer not found, so "I don't know" and no follow-ups). [sys_prompt_v1.py](backend/data/prompts/sys_prompt_v1.py) is unchanged.
+    - **v2 is now the default**, because the loader picks the highest version. To go back to zero-shot without a code change, set `SYS_PROMPT_VERSION=v1` on the container app.
+    - **Cost:** the prompt text grows from about 390 to about 1,770 characters (very roughly 100 to 440 tokens), added to the input of every question. This is an estimate from character counts, not a measured token count.
+    - **Tests:** new [test_prompts.py](backend/tests/test_prompts.py) checks that every version has only the `context` placeholder (so the example text cannot break the template), that the latest version is the default, that the environment variable selects a version, that an unknown version fails, and that v2 has examples and v1 does not. All 40 pytest tests pass (34 old, 6 new).
+    - **Not verified:** no real question was asked, so I do not know yet whether the answers or follow-ups are better, or whether the model copies example wording. Nothing was deployed; the Azure app still runs the old inline prompt. To compare, deploy with the targeted build and update, ask the same questions with `SYS_PROMPT_VERSION=v1` and without it, and compare by `prompt.version` and the tokens table.
+29. **(The made-up examples below were replaced in step 30.) Added 59 examples and an underwriter and broker persona as version 3.** You asked for at least 50 to 60 relevant examples, then for the persona. New file [sys_prompt_v3.py](backend/data/prompts/sys_prompt_v3.py); [sys_prompt_v1.py](backend/data/prompts/sys_prompt_v1.py) and [sys_prompt_v2.py](backend/data/prompts/sys_prompt_v2.py) (3 examples) are kept so the three can be compared.
+    - **Persona:** the prompt opens with "an experienced car insurance underwriter and broker": it reads the wording like an underwriter (cover, limits, excesses, exclusions) and explains it like a broker (plain language, practical consequence, neutral tone). It still must not quote prices, promise a claim will be paid, or give legal or financial advice.
+    - **The 59 examples** use two fictional insurers (ExampleCo and SampleCo) and made-up facts, so real policy facts cannot be copied. Mix: 27 answers found in the context, 8 partly found, 8 not found, 5 comparing several chunks or insurers, 2 conflicting contexts, 3 about the user's own situation, 6 about wording, instruction override, guessing, personal data, advice and false claims. 10 have no follow-ups.
+    - **v3 is now the default** (highest version). `SYS_PROMPT_VERSION=v1` or `v2` goes back with no code change.
+    - **Cost:** about 27,000 characters, very roughly 6,800 tokens added to the input of every question, against about 100 for v1 (estimate from character counts, not measured). That is large for this app, and the examples take a share of the model's attention, so more is not automatically better.
+    - **Tests:** [test_prompts.py](backend/tests/test_prompts.py) now also checks at least 50 examples, only the `{context}` placeholder in the text, and the persona. 43 tests pass.
+    - **Not verified:** no real question was asked, so answer quality and whether the model copies example wording are unknown. The examples were written by me, not reviewed against the real policy PDFs, so some may not match how the real policies read. Nothing was deployed.
+30. **Rewrote the v3 examples from your real PDFs (edited v3, no new version).** You said the made-up examples were wrong. I read all 9 PDFs in `backend/data/` (about 35,000 characters, 2 to 3 pages each) and rewrote the examples in [sys_prompt_v3.py](backend/data/prompts/sys_prompt_v3.py) from their wording. The two fictional insurers are gone; every example now uses the real file names, page numbers and figures of the insurer Northgate Mutual (mock data).
+    - **What the PDFs turned out to contain:** per-brand excesses by driver age, theft and model add-ons, courtesy car limits, parts rules, keys and battery cover, telematics discounts, illustrative premiums, optional extras and the claims steps, plus the standard wording ([insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf)) for windscreen, EU cover, exclusions, NCD, claims and cancelling. The brand wordings say the standard wording applies where they are silent.
+    - **Persona changed to match:** "an experienced car insurance underwriter and broker working with the Northgate Mutual wording". The earlier rule "do not quote prices" was wrong for these documents, which contain illustrative premiums. It now says: no personal quote, but an illustrative premium from a document may be repeated and labelled illustrative.
+    - **60 examples:** 15 on the standard wording, 11 to 12 each on Audi and BMW, 10 on Tesla, 8 on Ford and a few each on Mercedes, Volvo, Peugeot and Toyota. They cover excesses (with sums only where I added the numbers myself and said so), courtesy cars, parts, keys and batteries, telematics, business use and eligibility, standard-wording fallback, cross-brand comparisons, partly answered and unanswered questions, a conflict inside one page, and safety cases (instruction override, guessing, personal data, fraud, promises of payment). I first wrote 75 and trimmed to 60 because of the token cost.
+    - **Real conflicts found in the PDFs:** on page 2 of each brand the text and the table disagree on the key replacement limit (for example Toyota text GBP 700, table GBP 1,500; also Ford, Peugeot, Volvo and Tesla). One example teaches the model to report both figures. Worth fixing in the PDFs.
+    - **Checked:** a script confirmed that every cited file exists, every cited page is within that PDF's page count and every GBP figure in an answer appears in the PDF text (my own sums excepted, checked by hand). 43 pytest tests pass.
+    - **Cost:** about 37,000 characters, very roughly 9,200 tokens added to the input of every question (estimate, not measured), against about 100 for v1.
+    - **Not verified:** no real question was asked, so I do not know yet whether answers improve. The excerpts in the examples are shortened and flattened from the PDF text; the real chunks are bigger. Some follow-up questions point at nearby topics that the short excerpt does not show. Nothing was deployed.
+31. **Fixed the key replacement mismatch in the PDFs.** On page 2 of five brand documents the text and the table gave different key limits. The table row was the same boilerplate ("Up to GBP 1,500 per claim, including programming") in every brand, while the text of each brand gave its own figure. I treated the brand text as correct and changed only that table row, so step 30's "real conflicts" item is now resolved:
+    - [Toyota](backend/data/insurance_toyota_v1.pdf): GBP 700 (the words "including programming" were dropped, because the text does not say it).
+    - [Ford](backend/data/insurance_ford_v1.pdf): GBP 1,000 including programming.
+    - [Peugeot](backend/data/insurance_peugeot_v1.pdf): GBP 800 including programming (the text says a dealer must code the key).
+    - [Volvo](backend/data/insurance_volvo_v1.pdf): GBP 1,200 including programming.
+    - [Tesla](backend/data/insurance_tesla_v1.pdf): GBP 500 (words dropped for the same reason as Toyota).
+    - Audi, BMW and Mercedes were not changed: their text gives no key figure, so their table value of GBP 1,500 does not conflict with anything.
+    - **How:** the PDFs were made with ReportLab and no generator script is in the repo, so I patched the one text string in the page content with pypdf and kept the layout and fonts. Compared page by page before and after: the only text difference is that one table row per file, the page counts are unchanged, and the files still load with the PDF loader. I did not view them as rendered pages.
+    - **Assumption you should check:** the brand text is right and the table was wrong. If you would rather have GBP 1,500 everywhere, the originals are in git (`git checkout -- backend/data/<file>`).
+    - **Example updated:** the Toyota key example in [sys_prompt_v3.py](backend/data/prompts/sys_prompt_v3.py) no longer shows a conflict (it now answers GBP 700). The rule about reporting two conflicting figures stays, worded as "if the context ever gives two different figures".
+    - **Not done:** the index `insurance-policies-v2` in Azure AI Search still holds the old chunks with GBP 1,500, so the app will keep giving the old table figure until the five files are re-indexed with `python -m indexing.ragindexing` (replaces each file's chunks by name; calls Azure OpenAI and costs a little). I did not run it. Nothing was committed.
+
 ## Next steps
 
+- Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
+- code review agent
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
+- From your list, three things your app doesn't have
+- No reranking step.
+- No cache, so cache.hit would always read the same.
+- No streaming, so no time to first token.

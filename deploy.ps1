@@ -39,7 +39,15 @@ if (az containerapp list --resource-group $rg --query "[?name=='$api'].name" -o 
     Run "az containerapp delete --name $api --resource-group $rg --yes --output none"   # recreate on rerun
 }
 $apiKey = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")   # new shared key on every run
-$values = [ordered]@{ "CORS_ORIGINS" = "https://$webHost"; "API_KEY" = $apiKey }
+$appInsightsName = "insur-rag-insights"   # Application Insights, created once and reused (workspace-based, same region)
+az extension add --name application-insights --yes --only-show-errors
+if (-not (az monitor app-insights component list --resource-group $rg --query "[?name=='$appInsightsName'].name" -o tsv)) {
+    $workspaceId = az containerapp env show --name $env_ --resource-group $rg --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId -o tsv
+    $workspaceArm = az monitor log-analytics workspace list --resource-group $rg --query "[?customerId=='$workspaceId'].id | [0]" -o tsv
+    Run "az monitor app-insights component create --app $appInsightsName --location $location --resource-group $rg --kind web --application-type web --workspace $workspaceArm --output none"
+}
+$appInsightsConn = az monitor app-insights component show --app $appInsightsName --resource-group $rg --query connectionString -o tsv
+$values = [ordered]@{ "CORS_ORIGINS" = "https://$webHost"; "API_KEY" = $apiKey; "APPLICATIONINSIGHTS_CONNECTION_STRING" = $appInsightsConn }
 Get-Content .env | Where-Object { $_ -match "^\s*[A-Za-z_]+=.+" } | ForEach-Object {
     $key, $value = $_.Trim().Split("=", 2)
     $values[$key] = $value
@@ -58,6 +66,24 @@ az containerapp create --name $api --resource-group $rg --environment $env_ `
     --secrets $secrets --env-vars $envVars --output none
 if ($LASTEXITCODE -ne 0) { throw "Failed to create the container app" }
 $apiHost = az containerapp show --name $api --resource-group $rg --query properties.configuration.ingress.fqdn -o tsv
+
+# Health probes: liveness -> /health (process only), readiness and startup -> /ready (can reach the search index).
+# The container definition is read back and re-sent with probes added, so its env vars and secrets are kept.
+$app = az containerapp show --name $api --resource-group $rg -o json | ConvertFrom-Json
+$container = $app.properties.template.containers[0]
+$probes = @(
+    @{ type = "Liveness";  httpGet = @{ path = "/health"; port = 8000 }; periodSeconds = 30; failureThreshold = 3 },
+    @{ type = "Readiness"; httpGet = @{ path = "/ready";  port = 8000 }; periodSeconds = 15; failureThreshold = 3 },
+    @{ type = "Startup";   httpGet = @{ path = "/ready";  port = 8000 }; periodSeconds = 5;  failureThreshold = 30 }
+)
+$container | Add-Member -NotePropertyName probes -NotePropertyValue $probes -Force
+$probeFile = Join-Path $env:TEMP "insur-rag-probes.json"
+# compact JSON without a byte-order mark: the az YAML reader rejects pretty-printed JSON and a BOM
+$probeJson = @{ properties = @{ template = @{ containers = @($container) } } } | ConvertTo-Json -Depth 20 -Compress
+[System.IO.File]::WriteAllText($probeFile, $probeJson, (New-Object System.Text.UTF8Encoding($false)))
+az containerapp update --name $api --resource-group $rg --yaml $probeFile --output none
+if ($LASTEXITCODE -ne 0) { throw "Failed to add the health probes" }
+Remove-Item $probeFile
 
 # 5. Build the frontend against the backend address and upload it
 Push-Location frontend
