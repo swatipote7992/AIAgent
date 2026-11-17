@@ -750,8 +750,16 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - **Assumption you should check:** the brand text is right and the table was wrong. If you would rather have GBP 1,500 everywhere, the originals are in git (`git checkout -- backend/data/<file>`).
     - **Example updated:** the Toyota key example in [sys_prompt_v3.py](backend/data/prompts/sys_prompt_v3.py) no longer shows a conflict (it now answers GBP 700). The rule about reporting two conflicting figures stays, worded as "if the context ever gives two different figures".
     - **Not done:** the index `insurance-policies-v2` in Azure AI Search still holds the old chunks with GBP 1,500, so the app will keep giving the old table figure until the five files are re-indexed with `python -m indexing.ragindexing` (replaces each file's chunks by name; calls Azure OpenAI and costs a little). I did not run it. Nothing was committed.
+32. **Added a `max_tokens` cap** (1,000 by default, changeable with `LLM_MAX_TOKENS`) to the chat model in [insur_llm.py](backend/answering/insur_llm.py). Before this nothing limited the reply, or set a timeout or retries. A cap that is too low cuts the structured reply and makes the call fail, so keep it above a full answer plus follow-ups.
 
 ## Next steps
+
+To do, one by one (delete each item when it is done):
+
+- Set an explicit timeout and retry count on the chat model.
+- Record the cap and the finish reason (normal stop or cut by the limit) on the `llm_generation` span, so truncated answers show up in Application Insights.
+
+Other open items:
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
 - code review agent

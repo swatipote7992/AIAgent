@@ -73,6 +73,8 @@ def generate_reply(prompt, context: str, question: str) -> Reply:
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         temperature=0,
+        # Upper limit for the reply (answer plus follow-ups). Too low a value cuts the structured reply and the call fails.
+        max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "1000")),
     )
     chain = prompt | llm.with_structured_output(Reply)
 
