@@ -22,7 +22,9 @@ if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
 
     configure_azure_monitor()
 
-app = FastAPI(title="Policy RAG API")
+# FastAPI's own extra spans and exception logs are off: our stage spans (see observability/tracing.py)
+# already give the timing, and the exception logs can carry error text.
+app = FastAPI(title="Policy RAG API", telemetry={"operation_spans": False, "logs": False})
 
 # Frontend addresses allowed to call this API, comma separated (set CORS_ORIGINS on Azure).
 origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")

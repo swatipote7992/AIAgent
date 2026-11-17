@@ -678,11 +678,35 @@ python -m pytest
 
 8. **Not covered.** The tests call the hook script directly. They do not prove that Claude Code itself runs the hook with the settings in [settings.json](.claude/settings.json); that was only seen live once (secrets hook step 6). There are still no tests for the API, indexing or answering code.
 
+## Distributed tracing
+
+Steps taken to see where the time goes for one question. Before this, the API wrote one log line per question with the total time. Now each question is one trace with a timed span for every stage, so a slow answer can be traced to retrieval, the prompt or the model. You made the first code change (the helper file) yourself; the rest was made one edit at a time with your approval.
+
+1. **Goal.** One trace per question with a child span per stage, attributes that help to find a slow or expensive question, and later percentile times (p50, p95, p99) per stage plus alerts. Spans never hold question text, answer text, chunk text or secrets.
+2. **Wrote the helper** [tracing.py](backend/observability/tracing.py). It has one decorator, `traced("name")`, which runs a function inside a span with that name; the span's duration is the time of the function. If the function fails, the span is marked as an error and keeps only the exception's type name, not its message, because a message could contain a secret. The folder [backend/observability/](backend/observability/) also has leftover compiled files from the earlier logging feature that was reverted; they are not used.
+3. **Split the answering code into stages** in [insur_llm.py](backend/answering/insur_llm.py). `ask_llm` used to do everything in one function. It now calls three small functions in order, each with its own span: `retrieval` (search in Azure AI Search), `prompt` (join the chunks into the context and build the prompt) and `llm_generation` (create the chat model and get the answer). `ask_llm` itself is also a span and is the parent of the three. The answer returned to the API did not change.
+4. **Added attributes** (numbers and names only):
+   - on `retrieval`: `rag.chunks`, the number of chunks found;
+   - on `llm_generation`: `llm.model` (the deployment name), `llm.input_tokens` and `llm.output_tokens`, counted with LangChain's usage callback.
+5. **Added a span for embedding the question** in [embeddings.py](backend/vector_embedding/embeddings.py). A small subclass of the embedding model wraps only the query embedding in an `embedding` span, so it shows up under `retrieval`. Indexing is not affected because it embeds documents, not queries.
+6. **Expected shape of one trace:** `ask_llm` containing `retrieval` (which contains `embedding`), `prompt` and `llm_generation`.
+7. **Checked offline.** The helper returns the wrapped function's result. The embedding subclass is the model that `get_embedding_model()` returns, and with a fake parent call it produces an `embedding` span whose parent is the surrounding span. The model's deployment name is available for the attribute. `insur_llm.py` imports and has all four functions.
+8. **Deployed with a targeted update, not `deploy.ps1`.** `az acr build` of `backend/` as image `insur-rag-api` with a new tag (`trace-20261117112051`) succeeded, then `az containerapp update` on `insur-rag-api` to that image succeeded (exit code 0, revision `insur-rag-api--0000005`). The API key was not changed, and `SIMULATE_FAILURE` is not among the app's settings. Afterwards `/health` returned ok and `/ready` returned ready with 46 documents.
+9. **Asked questions from the frontend.** Sending a question from Claude's shell needs the API key, and the secrets hook blocked reading it, so the questions were asked from the frontend instead.
+10. **Looked at the traces in Application Insights** (`insur-rag-insights`): queried the `requests` and `dependencies` tables with `az monitor app-insights query` to check that each question is one trace with the expected parent and child spans and that the attributes are present.
+11. **How to look at it in the portal:** Application Insights, Transaction search, open a `POST /api/ask` request for the end-to-end view; Application map for the whole app; Logs for a query on the `dependencies` table grouped by span name.
+12. **Switched off FastAPI's own telemetry** in [ragapi.py](backend/api/ragapi.py) (extra spans and exception logs), because our stage spans already give the timing and exception text could carry secrets. It was first tested offline with a failing request carrying a fake marker in the error message, and no span held the marker. The change was deployed with the same targeted build and update as before (a new revision), then `/health` and `/ready` were checked.
+13. **Sampling.** Read the Azure Monitor package's code: with no sampler setting it uses a rate limit of about 5 traces per second, far above this app's traffic. No change was made and it was not tested under heavy load.
+14. **Percentiles.** Ran the p50, p95 and p99 query per span name. It works, but with so few questions the numbers are not meaningful yet.
+15. **Created a p95 alert** on `insur-rag-insights` from an ARM template: it fires when the p95 of the `llm_generation` span is above 5 seconds over 15 minutes, checked every 5 minutes. It has no action group, so it only shows in Azure Monitor, Alerts and sends no message. You chose not to create a new action group or install a CLI extension, so the template is deployed with the built-in `az deployment group create`.
+16. **Created a workbook** named `insur-rag-latency` on `insur-rag-insights` from an ARM template: a percentile table per stage, a p95-over-time chart and a tokens table. Deployment succeeded; it was not opened in the portal.
+17. **Saved the commands and templates** in [scripts.md](scripts.md): the targeted deploy, the KQL queries, the alert and workbook templates and the offline failing-request check.
+18. **Still to do.** An action group with a receiver so alerts send a message (the existing 5xx and latency alerts also have none), check the alert and workbook in the portal, and re-run the percentiles once there are enough questions. Not applicable to this app: cache hit or miss and time to first token (no cache, no streaming).
+
 ## Next steps
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
 - code review agent
-- Hook that blocks secrets: before any file write or git commit, check for API keys or .env content (Principles IV and V).
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
