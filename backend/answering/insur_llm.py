@@ -2,11 +2,13 @@ import os
 from functools import lru_cache
 
 from dotenv import load_dotenv
+from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 from answering.retrieval import get_retriever
 from observability.tracing import traced
+from opentelemetry import trace
 
 # .env wins over variables already set in the shell
 load_dotenv(override=True)
@@ -29,7 +31,10 @@ def get_cached_retriever():
 @traced("retrieval")
 def retrieve_chunks(question: str):
     # Find the chunks relevant to the question in Azure AI Search.
-    return get_cached_retriever().invoke(question)
+    chunks = get_cached_retriever().invoke(question)
+    # Only a count goes on the span, never the chunk text.
+    trace.get_current_span().set_attribute("rag.chunks", len(chunks))
+    return chunks
 
 
 @traced("prompt")
@@ -65,7 +70,17 @@ def generate_reply(prompt, context: str, question: str) -> Reply:
         temperature=0,
     )
     chain = prompt | llm.with_structured_output(Reply)
-    return chain.invoke({"context": context, "question": question})
+
+    # The callback counts the tokens the model used; the numbers go on the span, never any text.
+    with get_usage_metadata_callback() as usage:
+        reply = chain.invoke({"context": context, "question": question})
+
+    span = trace.get_current_span()
+    span.set_attribute("llm.model", llm.deployment_name)
+    for stats in usage.usage_metadata.values():
+        span.set_attribute("llm.input_tokens", stats.get("input_tokens", 0))
+        span.set_attribute("llm.output_tokens", stats.get("output_tokens", 0))
+    return reply
 
 
 @traced("ask_llm")
