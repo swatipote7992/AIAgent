@@ -50,6 +50,8 @@ $appInsightsConn = az monitor app-insights component show --app $appInsightsName
 $values = [ordered]@{ "CORS_ORIGINS" = "https://$webHost"; "API_KEY" = $apiKey; "APPLICATIONINSIGHTS_CONNECTION_STRING" = $appInsightsConn }
 Get-Content .env | Where-Object { $_ -match "^\s*[A-Za-z_]+=.+" } | ForEach-Object {
     $key, $value = $_.Trim().Split("=", 2)
+    # CORS_ORIGINS and API_KEY are generated above for Azure; the local values in .env must not replace them
+    if ($key -in @("CORS_ORIGINS", "API_KEY")) { return }
     $values[$key] = $value
 }
 $secrets = @(); $envVars = @()
