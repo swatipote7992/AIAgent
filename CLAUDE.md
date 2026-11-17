@@ -27,7 +27,7 @@ npm run dev        # http://localhost:5173
 npm run build      # type check + production build
 ```
 
-Tests use pytest (dev-only, pinned in [backend/requirements-dev.txt](backend/requirements-dev.txt), not in the Azure image). Run them from `backend/` with the virtual environment active: `pip install -r requirements-dev.txt`, then `python -m pytest`. Today the only tests cover the secrets hook ([backend/tests/test_block_secrets.py](backend/tests/test_block_secrets.py)); the API, indexing and answering code have none yet.
+Tests use pytest (dev-only, pinned in [backend/requirements-dev.txt](backend/requirements-dev.txt), not in the Azure image). Run them from `backend/` with the virtual environment active: `pip install -r requirements-dev.txt`, then `python -m pytest`. Today the tests cover the secrets hook ([backend/tests/test_block_secrets.py](backend/tests/test_block_secrets.py)) and the prompt versions ([backend/tests/test_prompts.py](backend/tests/test_prompts.py)); the API, indexing and answering code have none yet.
 
 Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`).
 
