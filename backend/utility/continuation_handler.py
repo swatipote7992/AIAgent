@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from opentelemetry import trace
 
+from utility.timeout_handler import check_deadline
 from utility.finish_reason_handler import is_content_filter_error
 
 MAX_CONTINUATIONS = 3  # at most this many extra model calls to finish a reply cut by the token limit
@@ -39,6 +40,7 @@ def continue_reply(llm, messages: list, partial: str, instruction: str, handler,
     text = partial
     span = trace.get_current_span()
     for rounds in range(1, max_rounds + 1):
+        check_deadline()  # no new model call once the request has run out of time
         span.set_attribute("llm.continuations", rounds)
         try:
             piece = llm.invoke(

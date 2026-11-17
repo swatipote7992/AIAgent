@@ -13,9 +13,10 @@ from answering.retrieval import get_retriever
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
-from utility.continuation import AnswerBlockedError, AnswerTruncatedError, blocked_message, continue_reply
+from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError, blocked_message, continue_reply
 from utility.finish_reason_handler import FinishReasonHandler
-from utility.retry import call_with_retry, is_transient
+from utility.timeout_handler import clamp_timeout
+from utility.transient_error_checker import is_transient
 
 # .env wins over variables already set in the shell
 load_dotenv(override=True)
@@ -39,13 +40,9 @@ def get_cached_retriever():
 
 @traced("retrieval")
 def retrieve_chunks(question: str):
-    # Find the chunks relevant to the question in Azure AI Search. The search client has its own timeout and retries;
-    # this wrapper runs the whole step (embedding the question plus the search) once more if it fails with a transient error.
-    chunks = call_with_retry(
-        lambda: get_cached_retriever().invoke(question),
-        retries=int(os.environ.get("RETRIEVAL_MAX_RETRIES", "1")),
-        what="retrieval",
-    )
+    # Find the chunks relevant to the question in Azure AI Search. Embedding the question and the search each have
+    # their own timeout and retries in their SDK clients (see vector_store.py and embeddings.py); nothing retries here.
+    chunks = get_cached_retriever().invoke(question)
     # Only a count and the policy file names go on the span, never the chunk text.
     # The stored source can be a full local path, so keep just the file name.
     span = trace.get_current_span()
@@ -82,8 +79,9 @@ def build_llm(deployment: str) -> AzureChatOpenAI:
     trace.get_current_span().set_attribute("gen_ai.request.max_tokens", max_tokens)
     return AzureChatOpenAI(
         azure_deployment=deployment,
-        # Seconds to wait for one attempt, and how often the client retries a timeout, a 429 or a 5xx error.
-        timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "25")),
+        # Seconds to wait for one attempt (never more than what is left of the request), and how often the OpenAI
+        # client retries a timeout, a 429 or a 5xx error. The client is the only place this call is retried.
+        timeout=clamp_timeout(float(os.environ.get("LLM_TIMEOUT_SECONDS", "25"))),
         max_retries=int(os.environ.get("LLM_MAX_RETRIES", "1")),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
@@ -117,7 +115,7 @@ def invoke_with_continuation(
     llm, prompt, context: str, question: str, handler
 ) -> tuple[Reply, int, int]:
     # Ask the model for the structured reply. If the token limit cuts it, send the partial text back as an AI message
-    # and ask the model to carry on, at most MAX_CONTINUATIONS times (see utility/continuation.py).
+    # and ask the model to carry on, at most MAX_CONTINUATIONS times (see utility/continuation_handler.py).
     # Returns the reply plus the input and output tokens of the call that was cut (the library raises, so the
     # usage callback never sees them); both are 0 when nothing was cut.
     inputs = {"context": context, "question": question}

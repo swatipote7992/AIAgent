@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from langchain_openai import AzureOpenAIEmbeddings
 from observability.tracing import traced
 from opentelemetry import trace
-from utility.retry import is_transient
+from utility.transient_error_checker import is_transient
 
 load_dotenv(override=True)  # .env wins over variables already set in the shell
 

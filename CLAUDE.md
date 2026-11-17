@@ -7,6 +7,7 @@ A RAG app over fictional car insurance policy PDFs: LangChain, Azure OpenAI (`te
 - **Log everything in [README.md](README.md), step by step.** After every action or answer in this project (including installs, failed attempts, Azure changes and drills), add or update a numbered step in the README. When the direction changes, update the current direction and move abandoned approaches to a "Superseded options" section.
 - **No source code in the README.** Link the file path instead, for example `[ragapi.py](backend/api/ragapi.py)`. Shell commands to run are fine.
 - **Never deploy or change the live Azure app unless the owner says so.** Always ask first, every time, even for a small targeted rebuild. Re-indexing needs a yes too.
+- **Name every new file in snake_case with a specific name** (`exception_handler.py`, not `errors.py`; no spaces, no run-together words).
 - **Keep README entries short:** say what was done and why, not how it was tested or deployed.
 - Package management is **pip + `backend/requirements.txt`** (pinned). uv was dropped for the project; `uvx` is only used to run Spec Kit.
 - Be honest in reports: say what was verified and what was not. Do not claim something works in Azure unless it was checked there.

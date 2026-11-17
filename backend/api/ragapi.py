@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import secrets
@@ -7,11 +6,12 @@ import time
 from answering.insur_llm import ask_llm
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
+from api.exception_handler import register_exception_handlers
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from utility.retry import is_transient
+from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError
+from utility.timeout_handler import RequestTimeoutError, run_with_deadline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ragapi")
@@ -100,36 +100,26 @@ def answer(question: str) -> dict:
     return ask_llm(question)
 
 
+register_exception_handlers(app)  # 504, 422 and 502 for our own errors, see api/exception_handler.py
+
+
 @app.post("/api/ask", dependencies=[Depends(require_api_key)])
 async def ask(request: AskRequest):
     """Take the user's question and return the answer with the chunks it was based on.
 
-    The whole request has one time budget (REQUEST_TIMEOUT_SECONDS). If an attempt fails with a transient error
-    and budget is left, it is tried again, up to REQUEST_MAX_ATTEMPTS attempts. Running out of budget gives a 504.
-    Each stage also has its own timeout and retries (LLM, embedding, search), so the budget is the last limit.
+    The whole request has one time budget (REQUEST_TIMEOUT_SECONDS, see utility/timeout_handler.py). Calls to Azure are
+    retried only inside their own SDK clients; nothing here retries the request.
     """
     question = request.question.strip()
     started = time.perf_counter()
-    budget = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "60"))
-    attempts = int(os.environ.get("REQUEST_MAX_ATTEMPTS", "2"))
-    for attempt in range(1, attempts + 1):
-        remaining = budget - (time.perf_counter() - started)
-        try:
-            if remaining <= 0:
-                raise TimeoutError("budget used up")
-            # The work runs in a thread; when the budget ends we stop waiting for it (the thread ends by its own timeouts).
-            result = await asyncio.wait_for(run_in_threadpool(answer, question), timeout=remaining)
-            break
-        except Exception as error:
-            ms = round((time.perf_counter() - started) * 1000)
-            if isinstance(error, TimeoutError) and time.perf_counter() - started >= budget - 0.05:
-                log.error("ask ran out of time after %d ms (budget %.0f s), question_chars=%d", ms, budget, len(question))
-                raise HTTPException(status_code=504, detail=f"The answer took longer than {budget:.0f} seconds. Please try again.")
-            if attempt < attempts and is_transient(error):
-                log.warning("ask attempt %d failed after %d ms (%s), trying again", attempt, ms, type(error).__name__)
-                continue
-            log.error("ask failed after %d ms, attempt %d, question_chars=%d, error=%s", ms, attempt, len(question), error)
-            raise HTTPException(status_code=502, detail=f"Could not answer the question: {error}")
+    try:
+        result = await run_with_deadline(answer, question)
+    except (RequestTimeoutError, AnswerBlockedError, AnswerTruncatedError):
+        raise  # turned into 504, 422 and 502 by the handlers in api/exception_handler.py
+    except Exception as error:  # anything else: a clear 502 (raised here so the response gets the CORS headers)
+        ms = round((time.perf_counter() - started) * 1000)
+        log.error("ask failed after %d ms, question_chars=%d, error=%s", ms, len(question), error)
+        raise HTTPException(status_code=502, detail=f"Could not answer the question: {error}")
     ms = round((time.perf_counter() - started) * 1000)
     sources = sorted({str(c.get("source")) for c in result.get("chunks", [])})
     log.info("ask ok in %d ms, question_chars=%d, chunks=%d, sources=%s", ms, len(question), len(result.get("chunks", [])), sources)

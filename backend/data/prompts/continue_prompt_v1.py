@@ -1,4 +1,4 @@
-# Version 1 of the instruction sent after a reply that the token limit cut off (see utility/continuation.py).
+# Version 1 of the instruction sent after a reply that the token limit cut off (see utility/continuation_handler.py).
 # The partial reply goes back to the model as an AI message, then this text as the next user message.
 # The reply is a JSON object (answer and followups), so the rest of it must join the partial text exactly.
 CONTINUE_PROMPT = (
