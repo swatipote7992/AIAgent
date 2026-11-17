@@ -9,6 +9,7 @@ from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 from answering.retrieval import get_retriever
 from observability.tracing import traced
+from data.prompts import load_system_prompt
 from opentelemetry import trace
 
 # .env wins over variables already set in the shell
@@ -52,15 +53,12 @@ def build_prompt(chunks):
         for c in chunks
     )
 
+    # The system prompt lives in backend/data/prompts/sys_prompt_v<N>.py
+    system_text, version = load_system_prompt()
+    trace.get_current_span().set_attribute("prompt.version", version)
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", (
-            "Answer only from the context below. "
-            "If the answer is not in the context, say you don't know. "
-            "Mention the source and page for each fact. "
-            "Also suggest up to 3 follow-up questions the user could ask next. Each must be a short, "
-            "complete question that makes sense on its own and can be answered from the context below. "
-            "If you do not know the answer, suggest no follow-ups.\n\nContext:\n{context}"
-        )),
+        ("system", system_text),
         ("human", "{question}"),
     ])
     return prompt, context
