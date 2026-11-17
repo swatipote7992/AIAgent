@@ -686,3 +686,7 @@ python -m pytest
 - Replace the shared API key with per-user sign-in on the backend.
 - Replace the registry admin login with a managed identity.
 - Run the deploy from a CI pipeline instead of by hand.
+- From your list, three things your app doesn't have
+- No reranking step.
+- No cache, so cache.hit would always read the same.
+- No streaming, so no time to first token.

@@ -6,12 +6,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 from answering.retrieval import get_retriever
+from observability.tracing import traced
 
-load_dotenv(override=True)  # .env wins over variables already set in the shell
+# .env wins over variables already set in the shell
+load_dotenv(override=True)
 
 
 class Reply(BaseModel):
-    """What the chat model returns: the answer plus questions the user could ask next."""
+    # What the chat model returns: the answer plus questions the user could ask next.
 
     answer: str = Field(description="The answer, with source and page for each fact.")
     followups: list[str] = Field(
@@ -24,23 +26,18 @@ def get_cached_retriever():
     return get_retriever()
 
 
-def ask_llm(question: str) -> dict:
-    """Retrieve the chunks relevant to the question and let the chat model answer from them."""
-    chunks = get_cached_retriever().invoke(question)
+@traced("retrieval")
+def retrieve_chunks(question: str):
+    # Find the chunks relevant to the question in Azure AI Search.
+    return get_cached_retriever().invoke(question)
 
+
+@traced("prompt")
+def build_prompt(chunks):
     # Join the chunk texts into one context string, keeping source and page for citations
     context = "\n\n".join(
         f"[{c.metadata.get('source')}, page {c.metadata.get('page_label')}]\n{c.page_content}"
         for c in chunks
-    )
-
-    """Chat model and prompt, built once and reused for every question."""
-    llm = AzureChatOpenAI(
-        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-        temperature=0,
     )
 
     prompt = ChatPromptTemplate.from_messages([
@@ -54,8 +51,29 @@ def ask_llm(question: str) -> dict:
         )),
         ("human", "{question}"),
     ])
+    return prompt, context
+
+
+@traced("llm_generation")
+def generate_reply(prompt, context: str, question: str) -> Reply:
+    # Chat model, built for every question.
+    llm = AzureChatOpenAI(
+        azure_deployment=os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4.1-mini"),
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+        temperature=0,
+    )
     chain = prompt | llm.with_structured_output(Reply)
-    reply = chain.invoke({"context": context, "question": question})
+    return chain.invoke({"context": context, "question": question})
+
+
+@traced("ask_llm")
+def ask_llm(question: str) -> dict:
+    # Retrieve the chunks relevant to the question and let the chat model answer from them.
+    chunks = retrieve_chunks(question)
+    prompt, context = build_prompt(chunks)
+    reply = generate_reply(prompt, context, question)
 
     return {
         "answer": reply.answer,
