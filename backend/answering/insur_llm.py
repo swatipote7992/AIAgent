@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from pathlib import PureWindowsPath
 
 from dotenv import load_dotenv
 from langchain_core.callbacks import get_usage_metadata_callback
@@ -32,8 +33,14 @@ def get_cached_retriever():
 def retrieve_chunks(question: str):
     # Find the chunks relevant to the question in Azure AI Search.
     chunks = get_cached_retriever().invoke(question)
-    # Only a count goes on the span, never the chunk text.
-    trace.get_current_span().set_attribute("rag.chunks", len(chunks))
+    # Only a count and the policy file names go on the span, never the chunk text.
+    # The stored source can be a full local path, so keep just the file name.
+    span = trace.get_current_span()
+    span.set_attribute("rag.chunks", len(chunks))
+    span.set_attribute(
+        "rag.sources",
+        sorted({PureWindowsPath(str(c.metadata.get("source"))).name for c in chunks}),
+    )
     return chunks
 
 
@@ -76,16 +83,21 @@ def generate_reply(prompt, context: str, question: str) -> Reply:
         reply = chain.invoke({"context": context, "question": question})
 
     span = trace.get_current_span()
-    span.set_attribute("llm.model", llm.deployment_name)
+    # The standard OpenTelemetry GenAI names, so tools such as Microsoft Foundry's Traces page can recognise the call.
+    span.set_attribute("gen_ai.operation.name", "chat")
+    span.set_attribute("gen_ai.provider.name", "azure.ai.openai")
+    span.set_attribute("gen_ai.request.model", llm.deployment_name)
     for stats in usage.usage_metadata.values():
-        span.set_attribute("llm.input_tokens", stats.get("input_tokens", 0))
-        span.set_attribute("llm.output_tokens", stats.get("output_tokens", 0))
+        span.set_attribute("gen_ai.usage.input_tokens", stats.get("input_tokens", 0))
+        span.set_attribute("gen_ai.usage.output_tokens", stats.get("output_tokens", 0))
     return reply
 
 
 @traced("ask_llm")
 def ask_llm(question: str) -> dict:
     # Retrieve the chunks relevant to the question and let the chat model answer from them.
+    # Only the length of the question goes on the span, never its text.
+    trace.get_current_span().set_attribute("question.chars", len(question))
     chunks = retrieve_chunks(question)
     prompt, context = build_prompt(chunks)
     reply = generate_reply(prompt, context, question)

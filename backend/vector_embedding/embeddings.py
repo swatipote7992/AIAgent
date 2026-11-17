@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import AzureOpenAIEmbeddings
 from observability.tracing import traced
+from opentelemetry import trace
 
 load_dotenv(override=True)  # .env wins over variables already set in the shell
 
@@ -14,6 +15,11 @@ class TracedEmbeddings(AzureOpenAIEmbeddings):
 
     @traced("embedding")
     def embed_query(self, text: str) -> list[float]:
+        # Only the kind of call and the model name go on the span, never the text being embedded.
+        span = trace.get_current_span()
+        span.set_attribute("gen_ai.operation.name", "embeddings")
+        span.set_attribute("gen_ai.provider.name", "azure.ai.openai")
+        span.set_attribute("gen_ai.request.model", self.deployment)
         return super().embed_query(text)
 
 

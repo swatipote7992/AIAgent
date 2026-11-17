@@ -35,7 +35,8 @@ Tokens per question:
 ```kusto
 dependencies
 | where name == "llm_generation" and timestamp > ago(24h)
-| extend input_tokens = toint(customDimensions["llm.input_tokens"]), output_tokens = toint(customDimensions["llm.output_tokens"])
+| extend input_tokens = toint(coalesce(tostring(customDimensions["gen_ai.usage.input_tokens"]), tostring(customDimensions["llm.input_tokens"])))
+| extend output_tokens = toint(coalesce(tostring(customDimensions["gen_ai.usage.output_tokens"]), tostring(customDimensions["llm.output_tokens"])))
 | project timestamp, input_tokens, output_tokens, duration
 | order by timestamp desc
 ```
@@ -149,7 +150,7 @@ A shared workbook named `insur-rag-latency` with a percentile table, a p95-over-
           "type": 3,
           "content": {
             "version": "KqlItem/1.0",
-            "query": "dependencies | where name == \"llm_generation\" and timestamp > ago(24h) | extend input_tokens = toint(customDimensions[\"llm.input_tokens\"]), output_tokens = toint(customDimensions[\"llm.output_tokens\"]) | project timestamp, input_tokens, output_tokens, duration | order by timestamp desc",
+            "query": "dependencies | where name == \"llm_generation\" and timestamp > ago(24h) | extend input_tokens = toint(coalesce(tostring(customDimensions[\"gen_ai.usage.input_tokens\"]), tostring(customDimensions[\"llm.input_tokens\"]))), output_tokens = toint(coalesce(tostring(customDimensions[\"gen_ai.usage.output_tokens\"]), tostring(customDimensions[\"llm.output_tokens\"]))) | project timestamp, input_tokens, output_tokens, duration | order by timestamp desc",
             "size": 0,
             "queryType": 0,
             "resourceType": "microsoft.insights/components",
