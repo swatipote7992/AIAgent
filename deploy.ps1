@@ -99,6 +99,6 @@ Pop-Location
 
 Write-Host "Frontend: https://$webHost"
 Write-Host "Backend:  https://$apiHost/docs"
-Write-Host "The backend only answers calls that carry the shared key (API_KEY), which is built into the frontend."
-Write-Host "Only invited users can open the frontend. Invite someone with:"
-Write-Host "  az staticwebapp users invite --name $web --resource-group $rg --authentication-provider aad --user-details <email> --domain $webHost --roles invited --invitation-expiration-in-hours 24"
+Write-Host "The frontend is public: anyone can open it, no sign-in. The shared key (API_KEY) is built into the page, so it is not a secret."
+Write-Host "The backend limits how often one visitor can ask and how many questions it answers per day (RATE_LIMIT_* in .env.example)."
+Write-Host "Set an Azure budget alert on the resource group $rg so a cost surprise reaches you."

@@ -1,7 +1,9 @@
 import logging
 
+from api.rate_limiter import all_visitors_key
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError
 from utility.timeout_handler import RequestTimeoutError
 
@@ -27,3 +29,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def answer_truncated(request: Request, error: AnswerTruncatedError):
         log.error("answer truncated: %s", error)
         return JSONResponse(status_code=502, content={"detail": str(error)})
+
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limited(request: Request, error: RateLimitExceeded):
+        # No address is logged, only which of the two limits was hit.
+        daily_ceiling = error.limit.key_func is all_visitors_key
+        log.warning("question refused: %s limit reached", "daily all-visitors" if daily_ceiling else "per-visitor")
+        detail = (
+            "The service has reached today's question limit. Please try again tomorrow."
+            if daily_ceiling
+            else "You are asking too fast. Please wait a moment and try again."
+        )
+        try:
+            retry_after = int(error.limit.limit.get_expiry())  # length of the window that was used up, in seconds
+        except Exception:
+            retry_after = 60
+        return JSONResponse(status_code=429, content={"detail": detail}, headers={"Retry-After": str(retry_after)})

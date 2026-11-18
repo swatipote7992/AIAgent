@@ -15,7 +15,7 @@ AIAgent/
 ├── deploy.ps1           deploys everything to Azure (see "Deploying to Azure")
 ├── frontend/            React + TypeScript + Vite web app
 │   ├── package.json, vite.config.ts, tsconfig.json, index.html
-│   ├── public/          staticwebapp.config.json (sign-in rule for Azure)
+│   ├── public/          staticwebapp.config.json (access rule for Azure)
 │   └── src/             main.tsx, App.tsx, api.ts, types.ts, styles.css
 └── backend/
     ├── .venv/           virtual environment (not in git)
@@ -51,7 +51,7 @@ AIAgent/
 | [insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [audi](backend/data/insurance_audi_v1.pdf), [bmw](backend/data/insurance_bmw_v1.pdf), [mercedes](backend/data/insurance_mercedes_v1.pdf) | Fictional mock car insurance policies used as input |
 | [deploy.ps1](deploy.ps1) | Deploys the backend (Azure Container Apps) and the frontend (Azure Static Web Apps) |
 | [backend/Dockerfile](backend/Dockerfile) | Builds the backend container image |
-| [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Makes the deployed frontend require sign-in, invited users only |
+| [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Lets anyone open the deployed frontend, no sign-in (it was invited users only until the public release, see step 35) |
 | [.env.example](.env.example) | Template for the settings in `.env` (project root) |
 | [requirements.txt](backend/requirements.txt) | Pinned dependencies |
 | [.gitignore](.gitignore), [backend/.gitignore](backend/.gitignore) | Keep `.venv`, `.env` and caches out of git |
@@ -396,7 +396,7 @@ Open http://localhost:5173. To check types and make a production build: `npm run
 - Saved conversation history (the chat resets on reload).
 - Highlighting which chunks the answer actually cited.
 - Streaming the answer as it is written.
-- Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is protected by the frontend sign-in plus the shared API key (see "Deploying to Azure").
+- Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is public (after the release in step 35) and is protected by the rate limit and daily ceiling in [rate_limiter.py](backend/api/rate_limiter.py) plus the shared API key (see "Deploying to Azure").
 
 ## Deploying to Azure
 
@@ -416,8 +416,8 @@ Live addresses:
 ### Decisions
 
 - **Two hosts with CORS** instead of one container serving both. I first built a version where FastAPI served the built frontend (one container, no CORS). Direction changed to two hosts, so the static-file code was removed from [ragapi.py](backend/api/ragapi.py) and CORS was added.
-- **Who can use it: you and a few invited people.** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) lets only users with the `invited` role open the frontend, signing in with a Microsoft account.
-- **The backend has its own protection.** The sign-in only covers the frontend page, so the backend also needs the shared `API_KEY`, otherwise anyone who found its address could run up Azure OpenAI costs.
+- **Who can use it: everyone, once the public release in step 35 is deployed.** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) now allows anonymous visitors. Until that release is deployed the live site still lets only users with the `invited` role in, through a Microsoft sign-in.
+- **The backend protects itself.** The shared `API_KEY` is readable in the page, so it only stops casual calls. What limits the cost is the per-visitor rate limit and the daily ceiling for all visitors ([rate_limiter.py](backend/api/rate_limiter.py)).
 - **Secrets stay out of git and out of the image.** [backend/.dockerignore](backend/.dockerignore) keeps `.env` out of the image. [deploy.ps1](deploy.ps1) reads `.env` at run time and stores each value as a Container Apps secret.
 
 ### How to deploy
@@ -430,7 +430,7 @@ Live addresses:
    - Creates the Static Web App first, because its address must go into `CORS_ORIGINS`.
    - Creates the Container Apps environment and the backend app with all settings as secrets, plus a new random `API_KEY`.
    - Builds the frontend against the backend address and key, and uploads it.
-4. Invite yourself (the frontend lets in invited users only). Use a Microsoft account email:
+4. Only while the site is invite-only: invite yourself (the frontend lets in invited users only). Use a Microsoft account email:
 
 ```powershell
 az staticwebapp users invite --name insur-rag-web --resource-group insu_rag_rg --authentication-provider aad --user-details <your-microsoft-email> --domain white-dune-05b8e1a0f.8.azurestaticapps.net --roles invited --invitation-expiration-in-hours 24
@@ -451,7 +451,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 
 - The backend `/docs` page returns 200.
 - `POST /api/ask` without the key returns 401.
-- The frontend address redirects to the Microsoft sign-in (302).
+- (Invite-only setup) The frontend address redirects to the Microsoft sign-in (302).
 - The CORS preflight from `http://localhost:5173` that asks to send the key header returns 200 (tested locally).
 - `npm run build` passes with the new [api.ts](frontend/src/api.ts).
 - Inviting a user, signing in and getting an answer from the deployed site was done and confirmed by you. I did not check it myself, and I made no call with the correct key from here because it would call Azure OpenAI.
@@ -459,7 +459,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 ### Things to know
 
 - **First question after idle is slow.** The backend scales to zero, so it can take 10 to 30 seconds to start.
-- **The key is in the frontend code.** The `API_KEY` is built into the frontend JavaScript. Only invited, signed-in users can load it, but any of them could read it. It protects against strangers, not against invited users.
+- **The key is in the frontend code.** The `API_KEY` is built into the frontend JavaScript, so with a public site anyone can read it. It is not a secret; the rate limit and the daily ceiling are the real protection.
 - **Cost.** The Basic registry costs a few pounds a month. Container Apps and Static Web Apps cost almost nothing at this size.
 - **Do not delete the resource group `insu_rag_rg`.** It also contains `insuragservice` (AI Search) and `insuragopenai` (Azure OpenAI). To remove only this app, delete the container app, the Container Apps environment, the static web app and the registry one by one.
 - **Different names.** Names must be unique across Azure. Anyone else using [deploy.ps1](deploy.ps1) has to change the names at the top.
@@ -766,10 +766,19 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - **One deadline** ([utility/timeout_handler.py](backend/utility/timeout_handler.py)): `/api/ask` has a budget of 60 s (`REQUEST_TIMEOUT_SECONDS`) kept in a context variable. No new model call or continuation starts after it has passed, and each model call's timeout is capped by the time left. When it runs out the client gets a 504. Python cannot stop a running thread, so the worker thread ends on its own, but it starts nothing new.
     - **Error responses** ([api/exception_handler.py](backend/api/exception_handler.py)): our own errors are registered once and become 504 (out of time), 422 (stopped by the content filter) and 502 (answer still cut off after 3 continuations), all as `{"detail": ...}`; any other failure is a 502 as before. The responses carry the CORS headers.
     - **Known limits:** the search index client that LangChain creates at the first question uses the Azure SDK's default retries, which can be long if the index is down. Fully cancelling in-flight calls would need an async rewrite of the pipeline. No fallback deployments exist yet, so both fallback settings are empty. Not live yet.
+35. **Making the app public, with limits** (you chose "public with limits"; not deployed yet). The deployed site only let invited Microsoft accounts in, and the backend relied on a key that sits in the page, so removing the sign-in alone would have left no cost protection.
+    - **Frontend:** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) now allows anonymous visitors, and the sign-in redirect is gone. The comment in [api.ts](frontend/src/api.ts) and the messages at the end of [deploy.ps1](deploy.ps1) now say the key is not a secret.
+    - **Rate limits** ([api/rate_limiter.py](backend/api/rate_limiter.py), applied in [ragapi.py](backend/api/ragapi.py), using the `slowapi` package pinned in [requirements.txt](backend/requirements.txt)): per visitor 6 questions a minute and 60 an hour, and 1,000 questions a day for everyone together. A refused question gets a 429 with `Retry-After` and a plain message, which the frontend already shows ([exception_handler.py](backend/api/exception_handler.py)). Calls with a wrong key are refused first and do not use up anyone's allowance. The three numbers are settings in [.env.example](.env.example) and were chosen by me, so adjust them to your budget.
+    - **Who counts as one visitor:** the last `X-Forwarded-For` address, which the Azure proxy adds itself; entries a visitor writes earlier in that header cannot dodge the limit.
+    - **Known limits:** the counters are in the container's memory, so they restart from zero when the container restarts or scales to zero, and the daily ceiling is a safety net, not an exact count. They work because the app runs as one replica. Whether Azure's proxy really puts the visitor's address last in that header is not checked on the live app; if it does not, every visitor shares one limit, which protects the cost but can block real users. The API's own `/docs` page is also public. The key in the page is readable by anyone, so the limits and a budget alert are the protection. The nearest cost risk is a determined person with many addresses; per-user sign-in on the API would be the real fix.
+    - **To release:** the frontend change needs the full [deploy.ps1](deploy.ps1) (the frontend is built with the backend key, which is not readable here). That recreates the backend and issues a new key. Waiting for your yes.
 
 ## Next steps
 
 To do, one by one (delete each item when it is done):
+
+- Create an Azure budget alert on `insu_rag_rg` so a cost surprise reaches you (needs an action group with an email; none exists yet).
+- After the public release, check on the live app that the per-visitor limit works for different visitors (see the `X-Forwarded-For` note in step 35).
 
 - Check the continuation and the fallbacks with the real Azure model (for example one question with `LLM_MAX_TOKENS=30`), since all of it was tested only against fake servers.
 
