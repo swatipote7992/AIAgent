@@ -1,2 +1,17 @@
 -r requirements.txt
+# Dev-only. pytest runs the tests; azure-ai-evaluation and its dependencies run the evals in backend/evals/.
+azure-ai-evaluation==1.18.12
+azure-storage-blob==12.31.1
+cloudpickle==3.1.3
+defusedxml==0.7.1
+Jinja2==3.1.6
+joblib==1.6.0
+MarkupSafe==3.0.4
+nltk==3.10.4
+pandas==2.3.3
 pytest==9.2.0
+python-dateutil==4.0.0
+pytz==2026.6
+ruamel.yaml==0.19.1
+tqdm==4.70.1
+tzdata==2026.6

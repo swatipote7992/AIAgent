@@ -32,6 +32,8 @@ npm run build      # type check + production build
 
 Tests use pytest (dev-only, pinned in [backend/requirements-dev.txt](backend/requirements-dev.txt), not in the Azure image). Run them from `backend/` with the virtual environment active: `pip install -r requirements-dev.txt`, then `python -m pytest`. Today the tests cover the secrets hook ([backend/tests/test_block_secrets.py](backend/tests/test_block_secrets.py)) and the prompt versions ([backend/tests/test_prompts.py](backend/tests/test_prompts.py)); the API, indexing and answering code have none yet.
 
+Evals (AI quality checks against `backend/data/golden_data/`, they call Azure OpenAI and cost money): `python -m evals.run_evals --dry-run` shows the plan, `--retrieval-only` checks only the search, `--versions v1 v2 v3` compares prompt versions, `--gate` fails below the pass marks in `backend/evals/gate_thresholds.py`. Ask before a real run.
+
 Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`).
 
 ## Architecture
