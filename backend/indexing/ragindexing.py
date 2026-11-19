@@ -4,7 +4,7 @@ from indexing.chunking import create_chunk
 from indexing.clean_text import clean_documents
 from indexing.load_pdf import load_pdf
 from indexing.metadata import enrich_metadata
-from vector_embedding.vector_store import store_chunks
+from indexing.vector_storing import store_chunks
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 

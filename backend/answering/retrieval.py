@@ -11,7 +11,7 @@ def get_retriever(k: int = DEFAULT_K, search_type: str = DEFAULT_SEARCH_TYPE, fi
     """
     search_kwargs = {"filters": filters} if filters else {}
     # k is an argument of the retriever itself; putting it in search_kwargs passes it twice and fails
-    return create_vector_store(for_query=True).as_retriever(search_type=search_type, k=k, search_kwargs=search_kwargs)
+    return create_vector_store().as_retriever(search_type=search_type, k=k, search_kwargs=search_kwargs)
 
 
 def retrieve(question: str, k: int = DEFAULT_K, search_type: str = DEFAULT_SEARCH_TYPE) -> list[Document]:

@@ -15,11 +15,9 @@ log = logging.getLogger("embeddings")
 REQUIRED_SETTINGS = ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY")
 
 
-def _client_options(for_query: bool) -> dict:
+def _client_options() -> dict:
     # A question is embedded while the user waits, so it gets a timeout and a retry count.
-    # Indexing keeps the library defaults: it embeds whole documents and nobody is waiting.
-    if not for_query:
-        return {}
+    # Indexing keeps the library defaults; see indexing/data_embedding.py.
     return {
         "timeout": float(os.environ.get("EMBEDDING_TIMEOUT_SECONDS", "10")),
         "max_retries": int(os.environ.get("EMBEDDING_MAX_RETRIES", "2")),
@@ -38,7 +36,7 @@ def _fallback_embeddings() -> AzureOpenAIEmbeddings | None:
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-        **_client_options(True),
+        **_client_options(),
     )
 
 
@@ -64,7 +62,10 @@ class TracedEmbeddings(AzureOpenAIEmbeddings):
             return fallback.embed_query(text)
 
 
-def get_embedding_model(for_query: bool = False) -> AzureOpenAIEmbeddings:
+def get_embedding_model() -> AzureOpenAIEmbeddings:
+    """The embedding model used to embed a question at answer time: tracing and a fallback deployment.
+    The indexing-time model (library defaults, no tracing) is indexing/data_embedding.py.
+    """
     missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
@@ -74,5 +75,5 @@ def get_embedding_model(for_query: bool = False) -> AzureOpenAIEmbeddings:
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-        **_client_options(for_query),
+        **_client_options(),
     )
