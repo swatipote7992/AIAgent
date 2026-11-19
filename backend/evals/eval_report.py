@@ -3,15 +3,18 @@ from evals.gate_thresholds import GATE_THRESHOLDS, MAX_ERROR_RATE
 # Turns the per-case rows of one run into numbers per prompt version, a table to read, and the pass/fail of the gate.
 
 
+# Safe division: None instead of a crash or infinity when there is nothing to divide by.
 def rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
+# Mean of the non-None values, or None if there are none.
 def average(values: list[float]) -> float | None:
     values = [v for v in values if v is not None]
     return sum(values) / len(values) if values else None
 
 
+# Turns one run's per-case rows into the aggregate numbers shown in the comparison table.
 def summarize(rows: list[dict]) -> dict:
     answered = [r for r in rows if not r.get("error")]
     answerable = [r for r in answered if r["answerable"]]
@@ -59,6 +62,7 @@ ROWS = [  # (label, key, kind)
 ]
 
 
+# Renders one summary value as text for the table (percent, 1-5 score, or plain count).
 def _format(value, kind: str) -> str:
     if value is None:
         return "-"
@@ -69,6 +73,7 @@ def _format(value, kind: str) -> str:
     return str(value)
 
 
+# Builds the printable comparison table (one column per prompt version) plus the per-category pass counts.
 def format_table(summaries: dict[str, dict]) -> str:
     versions = list(summaries)
     width = max(len(label) for label, _, _ in ROWS) + 2

@@ -29,9 +29,11 @@ RESULTS_DIR = Path(__file__).parent / "results"  # git-ignored: answers and scor
 MUST_ANSWER = {"direct", "comparison", "fallback"}
 
 
-def evaluate_case(case: dict, ask, judges: dict | None, judge_answer) -> dict:
-    # Run one question through the app and apply every check. `ask`, `judges` and `judge_answer` are passed in so the
-    # checks can be tested without calling Azure.
+# Runs one question through the app and applies every check; batch_rows (instead of judges) defers judging to one
+# evaluate() call per version (see run_foundry_evaluation) rather than judging this case right away.
+def evaluate_case(
+    case: dict, ask, judges: dict | None, judge_answer, batch_rows: list | None = None
+) -> dict:
     row = {"id": case["id"], "category": case["category"], "answerable": case["answerable"], "question": case["question"],
            "error": None, "answer": "", "retrieval": None, "facts": None, "invalid_citations": [],
            "admits_not_knowing": False, "wrongly_refused": False, "leaked": [], "judges": None, "passed": False}
@@ -67,9 +69,23 @@ def evaluate_case(case: dict, ask, judges: dict | None, judge_answer) -> dict:
     if judges:
         context = "\n\n".join(f"[{c['source']}, page {c['page']}]\n{c['text']}" for c in chunks)
         row["judges"] = judge_answer(judges, case, answer, context)
+    elif batch_rows is not None:
+        context = "\n\n".join(
+            f"[{c['source']}, page {c['page']}]\n{c['text']}" for c in chunks
+        )
+        batch_rows.append(
+            {
+                "id": case["id"],
+                "query": case["question"],
+                "response": answer,
+                "context": context,
+                "ground_truth": case["expected_answer"],
+            }
+        )
     return row
 
 
+# Filters the golden dataset down to the cases this run should use (--ids, --categories, --limit).
 def select_cases(cases: list[dict], args) -> list[dict]:
     if args.ids:
         cases = [c for c in cases if c["id"] in args.ids]
@@ -78,6 +94,7 @@ def select_cases(cases: list[dict], args) -> list[dict]:
     return cases[: args.limit] if args.limit else cases
 
 
+# Prints a rough size and cost estimate for the planned run, without calling anything (used by --dry-run too).
 def print_plan(cases: list[dict], versions: list[str], args) -> None:
     answers = len(cases) * len(versions)
     print(f"Plan: {len(cases)} cases x {len(versions)} prompt version(s) {versions}")
@@ -93,6 +110,8 @@ def print_plan(cases: list[dict], versions: list[str], args) -> None:
     print("  Prices are not looked up here: check the Azure OpenAI price of your deployment before a full run.")
 
 
+# CLI entry point: parses arguments, runs every case through every chosen prompt version, prints the comparison
+# table, saves the full results to a JSON file, and (with --gate) fails the run if a pass mark is missed.
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate the RAG app on the golden dataset.")
     parser.add_argument("--dataset", help=f"golden dataset version, one of {dataset_versions()} (default: latest)")
@@ -125,11 +144,15 @@ def main(argv: list[str] | None = None) -> int:
         ask_llm,
     )  # imported here so --dry-run needs no Azure settings
 
-    judges, judge_answer = None, None
+    judges, judge_answer, foundry_project = None, None, None
     if not args.retrieval_only and not args.no_judge:
-        from evals.judge_evaluators import build_judges, judge_answer
+        foundry_project = (
+            os.environ.get("AZURE_AI_PROJECT_ENDPOINT", "").strip() or None
+        )
+        if not foundry_project:
+            from evals.judge_evaluators import build_judges, judge_answer
 
-        judges = build_judges(args.judge_deployment)
+            judges = build_judges(args.judge_deployment)
 
     all_rows: dict[str, list[dict]] = {}
     if args.retrieval_only:
@@ -153,12 +176,24 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["SYS_PROMPT_VERSION"] = version  # the app reads it for every question
             print(f"\n--- system prompt {version} ---")
             rows = []
+            batch_rows = [] if foundry_project else None
             for case in cases:
-                row = evaluate_case(case, ask_llm, judges, judge_answer)
+                row = evaluate_case(case, ask_llm, judges, judge_answer, batch_rows)
                 rows.append(row)
                 scores = " ".join(f"{k[:5]}={v['score']:.0f}" for k, v in (row["judges"] or {}).items() if v["score"] is not None)
                 status = "ERROR " + row["error"] if row["error"] else ("pass" if row["passed"] else "FAIL")
                 print(f"  {row['id']} {row['category']:<13} {status:<5} retrieval {_show(row)} {scores} ({row.get('seconds')}s)")
+
+            if foundry_project and batch_rows:
+                from evals.judge_evaluators import run_foundry_evaluation
+
+                print(
+                    f"  judging {len(batch_rows)} answers through evaluate() and uploading to Foundry..."
+                )
+                scores_by_id, studio_url = run_foundry_evaluation(batch_rows, foundry_project, args.judge_deployment)
+                for row in rows:
+                    row["judges"] = scores_by_id.get(row["id"])
+                print(f"  Foundry run: {studio_url or '(no URL returned)'}")
             all_rows[version] = rows
 
     summaries = {name: summarize(rows) for name, rows in all_rows.items()}
@@ -181,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Formats one row's retrieval result for the per-case console line, for example "3/4 missing audi.pdf page 2".
 def _show(row: dict) -> str:
     r = row["retrieval"]
     return "n/a" if not r else f"{r['found']}/{r['total']}" + (f" missing {', '.join(r['missing'])}" if r["missing"] else "")
