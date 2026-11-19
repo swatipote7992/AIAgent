@@ -3,7 +3,7 @@ import os
 import secrets
 import time
 
-from retrieval.insur_llm import ask_llm
+from retrieval.chain_llm import ask_llm
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from api.exception_handler import register_exception_handlers

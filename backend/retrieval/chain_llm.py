@@ -21,7 +21,7 @@ from utility.transient_error_checker import is_transient
 # .env wins over variables already set in the shell
 load_dotenv(override=True)
 
-log = logging.getLogger("insur_llm")
+log = logging.getLogger("chain_llm")
 
 
 class Reply(BaseModel):
@@ -79,16 +79,12 @@ def build_llm(deployment: str) -> AzureChatOpenAI:
     trace.get_current_span().set_attribute("gen_ai.request.max_tokens", max_tokens)
     return AzureChatOpenAI(
         azure_deployment=deployment,
-        # Seconds to wait for one attempt (never more than what is left of the request), and how often the OpenAI
-        # client retries a timeout, a 429 or a 5xx error. The client is the only place this call is retried.
-        timeout=clamp_timeout(float(os.environ.get("LLM_TIMEOUT_SECONDS", "25"))),
-        max_retries=int(os.environ.get("LLM_MAX_RETRIES", "1")),
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         temperature=0,
-        # Upper limit for the reply (answer plus follow-ups). A reply cut by it is continued, see invoke_with_continuation.
-        max_tokens=max_tokens,
+        timeout=clamp_timeout(float(os.environ.get("LLM_TIMEOUT_SECONDS", "25"))),
+        max_retries=int(os.environ.get("LLM_MAX_RETRIES", "1")),
     )
 
 

@@ -24,12 +24,12 @@ AIAgent/
     ├── Dockerfile       builds the backend image (used by deploy.ps1)
     ├── indexing/        the indexing phase (run when documents change)
     │   ├── ragindexing.py   entry point: PDF to chunks to index
+    │   ├── data_embedding.py, vector_storing.py   embed and store the chunks
     │   └── load_pdf.py, clean_text.py, metadata.py, chunking.py
-    ├── vector_embedding/   shared by indexing and answering
-    │   └── embeddings.py, vector_store.py
-    ├── answering/       the answering phase (runs for every question)
+    ├── retrieval/       the answering phase (runs for every question)
+    │   ├── embeddings.py, vector_store.py   embed the question, connect to the index
     │   ├── retrieval.py     finds the chunks relevant to a question
-    │   └── insur_llm.py     builds the prompt and calls the chat model
+    │   └── chain_llm.py     builds the prompt and calls the chat model
     ├── api/
     │   └── ragapi.py        FastAPI endpoint used by the frontend
     └── data/            the sample PDFs
@@ -47,8 +47,8 @@ AIAgent/
 | [embeddings.py](backend/retrieval/embeddings.py) | Creates the Azure OpenAI embedding model used to embed a question at answer time (tracing, timeout, fallback) |
 | [vector_store.py](backend/retrieval/vector_store.py) | Connects to the Azure AI Search index to answer a question (timeout, retries) |
 | [retrieval.py](backend/retrieval/retrieval.py) | Retrieves the chunks most relevant to a question |
-| [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `insur_llm.py` |
-| [insur_llm.py](backend/retrieval/insur_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
+| [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `chain_llm.py` |
+| [chain_llm.py](backend/retrieval/chain_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
 | [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
 | [insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [audi](backend/data/insurance_audi_v1.pdf), [bmw](backend/data/insurance_bmw_v1.pdf), [mercedes](backend/data/insurance_mercedes_v1.pdf) | Fictional mock car insurance policies used as input |
 | [deploy.ps1](deploy.ps1) | Deploys the backend (Azure Container Apps) and the frontend (Azure Static Web Apps) |
@@ -157,8 +157,8 @@ Answering then runs on the stored index, for every question:
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 6 | Retrieve relevant chunks | [retrieval.py](backend/retrieval/retrieval.py), called by [insur_llm.py](backend/retrieval/insur_llm.py) | `get_retriever()` | the 4 chunks most relevant to the question |
-| 7 | Generate the answer | [insur_llm.py](backend/retrieval/insur_llm.py) | `ask_llm()` | the answer, with sources |
+| 6 | Retrieve relevant chunks | [retrieval.py](backend/retrieval/retrieval.py), called by [chain_llm.py](backend/retrieval/chain_llm.py) | `get_retriever()` | the 4 chunks most relevant to the question |
+| 7 | Generate the answer | [chain_llm.py](backend/retrieval/chain_llm.py) | `ask_llm()` | the answer, with sources |
 
 Each stage is described below in the same order.
 
@@ -272,7 +272,7 @@ You can check the same things in the Azure portal: the document count, and the v
 
 `get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](backend/retrieval/vector_store.py), so retrieval uses the same embedding deployment and index name as indexing (a separate, query-time embedding model in [embeddings.py](backend/retrieval/embeddings.py), with a timeout, retries and a fallback deployment; indexing's own model is [data_embedding.py](backend/indexing/data_embedding.py)). It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
 
-[insur_llm.py](backend/retrieval/insur_llm.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks. `retrieve(question)` in [retrieval.py](backend/retrieval/retrieval.py) does the same in one call.
+[chain_llm.py](backend/retrieval/chain_llm.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks.
 
 ### Search types
 
@@ -297,11 +297,11 @@ You can check the same things in the Azure portal: the document count, and the v
 
 - `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `python -m indexing.ragindexing`) with the configuration defined.
 
-## Stage 7: Generate the answer ([insur_llm.py](backend/retrieval/insur_llm.py))
+## Stage 7: Generate the answer ([chain_llm.py](backend/retrieval/chain_llm.py))
 
 ### How it works
 
-[insur_llm.py](backend/retrieval/insur_llm.py) answers one question in `ask_llm(question)`. It is called by the API for every request. It builds three plain objects once and reuses them:
+[chain_llm.py](backend/retrieval/chain_llm.py) answers one question in `ask_llm(question)`. It is called by the API for every request. It builds three plain objects once and reuses them:
 
 1. `llm`: `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
 2. `prompt`: a `ChatPromptTemplate` with two inputs, `{context}` (the chunks) and `{question}`.
@@ -337,21 +337,21 @@ The context uses `page_label`, the number a reader sees in a PDF viewer (the 13t
 
 A simple web app on top of the same pipeline. It is deliberately minimal for now: ask a question, read the answer, see which chunks were retrieved. More features can be added later.
 
-### API ([api/ragapi.py](backend/api/ragapi.py) and [insur_llm.py](backend/retrieval/insur_llm.py))
+### API ([api/ragapi.py](backend/api/ragapi.py) and [chain_llm.py](backend/retrieval/chain_llm.py))
 
 The API is split in two files:
 
 - [api/ragapi.py](backend/api/ragapi.py) is the web layer. It defines one endpoint, `POST /api/ask`, checks the request (`{"question": "..."}`, 1 to 1000 characters) and passes the question to `ask_llm()`. An empty question gets a 422 response, and any failure while answering (for example Azure not reachable) gets a 502 with the error message.
-- [insur_llm.py](backend/retrieval/insur_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/retrieval/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
+- [chain_llm.py](backend/retrieval/chain_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/retrieval/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
 
 Two protections were added for the deployed version:
 
 - **CORS.** The frontend and the backend are on different addresses, so [ragapi.py](backend/api/ragapi.py) allows calls only from the frontend addresses listed in the `CORS_ORIGINS` setting (default `http://localhost:5173`), POST only.
 - **API key.** `POST /api/ask` needs an `X-API-Key` header equal to the `API_KEY` setting. If `API_KEY` is not set (local development) the check is skipped. Without or with a wrong key the answer is 401.
 
-The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [insur_llm.py](backend/retrieval/insur_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
+The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [chain_llm.py](backend/retrieval/chain_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
 
-The prompt lives only in [insur_llm.py](backend/retrieval/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
+The prompt lives only in [chain_llm.py](backend/retrieval/chain_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
 
 ### Frontend ([frontend/](frontend/))
 
@@ -539,7 +539,7 @@ What it shows:
 
 ### Adding more documents later
 
-Question: if more documents are added, is a new index needed? No. Put the new PDF in `backend/data/` and run `python -m indexing.ragindexing` again against the same index. Before storing, [vector_store.py](backend/vector_embedding/vector_store.py) removes the old entries of each file being indexed (the "Removed N old entries" line), so unchanged files are simply refreshed and new files are added. A new index is only needed when the structure changes: a different embedding model or vector size, or new metadata fields in the index.
+Question: if more documents are added, is a new index needed? No. Put the new PDF in `backend/data/` and run `python -m indexing.ragindexing` again against the same index. Before storing, [vector_storing.py](backend/indexing/vector_storing.py) removes the old entries of each file being indexed (the "Removed N old entries" line), so unchanged files are simply refreshed and new files are added. A new index is only needed when the structure changes: a different embedding model or vector size, or new metadata fields in the index.
 
 ### Five more brands added
 

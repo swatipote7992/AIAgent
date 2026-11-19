@@ -1,4 +1,4 @@
-from retrieval.insur_llm import retrieve_chunks
+from retrieval.chain_llm import retrieve_chunks
 
 
 def retrieve_only(question: str) -> list[dict]:
