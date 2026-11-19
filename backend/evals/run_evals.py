@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    from answering.insur_llm import ask_llm  # imported here so --dry-run needs no Azure settings
+    from retrieval.insur_llm import ask_llm  # imported here so --dry-run needs no Azure settings
 
     judges, judge_answer = None, None
     if not args.retrieval_only and not args.no_judge:

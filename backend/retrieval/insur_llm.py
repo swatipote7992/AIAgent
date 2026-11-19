@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, Field, ValidationError
-from answering.retrieval import get_retriever
+from retrieval.retrieval import get_retriever
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace

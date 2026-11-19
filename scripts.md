@@ -218,7 +218,7 @@ tp.add_span_processor(SimpleSpanProcessor(exp))
 trace.set_tracer_provider(tp)
 
 from fastapi.testclient import TestClient
-import answering.insur_llm as m
+import retrieval.insur_llm as m
 from api.ragapi import app
 
 MARK = "LEAKMARKER123"

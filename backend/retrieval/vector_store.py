@@ -1,7 +1,7 @@
 import os
 
 from dotenv import load_dotenv
-from vector_embedding.embeddings import get_embedding_model
+from retrieval.embeddings import get_embedding_model
 from langchain_community.vectorstores.azuresearch import AzureSearch
 
 load_dotenv()  # reads the Azure settings from the .env file

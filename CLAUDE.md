@@ -38,8 +38,8 @@ Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`)
 
 ## Architecture
 
-- **Indexing** ([backend/indexing/](backend/indexing/)): load PDF, clean, add metadata, chunk, embed and store in Azure AI Search. Run it when documents change. Entry point is `ragindexing.py`; run it as a module (`-m`), never as a file.
-- **Answering** ([backend/answering/](backend/answering/)): `retrieval.py` finds chunks, `insur_llm.py` builds the prompt and calls the chat model.
+- **Indexing** ([backend/indexing/](backend/indexing/)): load PDF, clean, add metadata, chunk, embed ([data_embedding.py](backend/indexing/data_embedding.py)) and store ([vector_storing.py](backend/indexing/vector_storing.py)) in Azure AI Search. Run it when documents change. Entry point is `ragindexing.py`; run it as a module (`-m`), never as a file.
+- **Retrieval** ([backend/retrieval/](backend/retrieval/)): `retrieval.py` and `vector_store.py` find chunks (with a query-time timeout, retries and a fallback embedding deployment), `insur_llm.py` builds the prompt and calls the chat model.
 - **API** ([backend/api/ragapi.py](backend/api/ragapi.py)): `POST /api/ask` (needs the `X-API-Key` header), `GET /health` (liveness) and `GET /ready` (checks the search index). Logging and Azure Monitor (OpenTelemetry) are configured here.
 - **Frontend** ([frontend/src/](frontend/src/)): talks to the API using `VITE_API_URL` and `VITE_API_KEY`.
 - **Documents** ([backend/data/](backend/data/)): mock car policies named `insurance_<brand>_v1.pdf`. The file name without `.pdf` becomes the chunk's `document_type`.
