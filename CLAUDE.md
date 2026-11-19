@@ -46,7 +46,7 @@ Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`)
 
 ## Azure setup
 
-Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, environment `insur-rag-env`, scales to zero), image from the registry `insurragacr`. Frontend on Static Web Apps (`insur-rag-web`, invited users only). AI Search service `insuragservice`, Azure OpenAI `insuragopenai`, Application Insights `insur-rag-insights`. Secrets come from the root `.env` (git-ignored; template in [.env.example](.env.example)).
+Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, environment `insur-rag-env`, scales to zero), image from the registry `insurragacr`. Frontend on Static Web Apps (`insur-rag-web`). AI Search service `insuragservice`, Azure OpenAI deployments on the Azure AI Foundry account `technopanda92-5275-resource` (chat `gpt-4.1-mini`, embeddings `text-embedding-3-small`; the `insuragopenai` account also exists in the resource group but has no deployments and is unused), Application Insights `insur-rag-insights`. Secrets come from the root `.env` (git-ignored; template in [.env.example](.env.example)).
 
 ## Things that will bite you
 
