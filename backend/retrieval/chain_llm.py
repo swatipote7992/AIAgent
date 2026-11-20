@@ -10,6 +10,7 @@ from langchain_openai import AzureChatOpenAI
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, Field, ValidationError
 from retrieval.retrieval import get_retriever
+from backend.guadrails.input_guardrails import input_guardrails
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
@@ -185,6 +186,7 @@ def ask_llm(question: str) -> dict:
     # Retrieve the chunks relevant to the question and let the chat model answer from them.
     # Only the length of the question goes on the span, never its text.
     trace.get_current_span().set_attribute("question.chars", len(question))
+    input_guardrails(question)
     chunks = retrieve_chunks(question)
     prompt, context = build_prompt(chunks)
     reply = generate_reply(prompt, context, question)
