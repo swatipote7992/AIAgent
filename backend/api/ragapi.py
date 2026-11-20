@@ -10,6 +10,7 @@ from api.exception_handler import register_exception_handlers
 from api.rate_limiter import all_visitors_key, all_visitors_limit, limiter, per_visitor_limit, visitor_key
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from guardrails.exceptions import InputBlockedError
 from pydantic import BaseModel, Field
 from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError
 from utility.timeout_handler import RequestTimeoutError, run_with_deadline
@@ -122,8 +123,8 @@ async def ask(request: Request, body: AskRequest):
     started = time.perf_counter()
     try:
         result = await run_with_deadline(answer, question)
-    except (RequestTimeoutError, AnswerBlockedError, AnswerTruncatedError):
-        raise  # turned into 504, 422 and 502 by the handlers in api/exception_handler.py
+    except (RequestTimeoutError, AnswerBlockedError, AnswerTruncatedError, InputBlockedError):
+        raise  # turned into 504, 422 (x2) and 502 by the handlers in api/exception_handler.py
     except Exception as error:  # anything else: a clear 502 (raised here so the response gets the CORS headers)
         ms = round((time.perf_counter() - started) * 1000)
         log.error("ask failed after %d ms, question_chars=%d, error=%s", ms, len(question), error)

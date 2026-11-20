@@ -3,7 +3,7 @@ import logging
 from api.rate_limiter import all_visitors_key
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from guadrails.exceptions import InputBlockedError, blocked_input_message
+from guardrails.exceptions import InputBlockedError, blocked_input_message
 from slowapi.errors import RateLimitExceeded
 from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError
 from utility.timeout_handler import RequestTimeoutError

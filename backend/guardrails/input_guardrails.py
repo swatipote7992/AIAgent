@@ -1,6 +1,7 @@
 import re
 
 from guardrails.exceptions import InputBlockedError
+from guardrails.prompt_shields import check_prompt_shields
 from observability.tracing import traced
 from opentelemetry import trace
 
@@ -76,4 +77,7 @@ def deterministic_guardrail(question: str) -> None:
 
 @traced("input_guardrails")
 def input_guardrails(question: str) -> None:
+    # free and instant: runs first
     deterministic_guardrail(question)
+    # a real classifier call: only reached if the cheap checks already passed
+    check_prompt_shields(question)

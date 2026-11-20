@@ -13,5 +13,6 @@ def blocked_input_message(reason: str) -> str:
         "regulated_advice": "This assistant can only answer questions about what the policy documents say, not give financial or legal advice.",
         "abusive_language": "Please rephrase your question without that language.",
         "length_exceeded": "Your question is too long. Please reframe and ask a shorter question.",
+        "content_filter": "This question violates content policy. Please ask about the insurance policies directly.",
     }
     return messages.get(reason, "This question could not be answered.")

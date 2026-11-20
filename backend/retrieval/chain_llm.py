@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 from pathlib import PureWindowsPath
 
+import openai
 from dotenv import load_dotenv
 from langchain_core.callbacks import get_usage_metadata_callback
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,7 +11,8 @@ from langchain_openai import AzureChatOpenAI
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, Field, ValidationError
 from retrieval.retrieval import get_retriever
-from backend.guadrails.input_guardrails import input_guardrails
+from guardrails.content_filter_middleware import check_content_filter_error
+from guardrails.input_guardrails import input_guardrails
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
@@ -124,6 +126,11 @@ def invoke_with_continuation(
     except ContentFilterFinishReasonError as blocked:
         # The handler has already recorded "content_filter" (on_llm_error); turn it into a clear error.
         raise AnswerBlockedError(blocked_message("content_filter")) from blocked
+    except openai.BadRequestError as error:
+        # Raises InputBlockedError if this was the PROMPT itself blocked by the content filter (before any tokens
+        # were generated, a different failure than ContentFilterFinishReasonError above); otherwise re-raised as is.
+        check_content_filter_error(error)
+        raise
     except LengthFinishReasonError as cut:
         # The handler has already recorded "length" (on_llm_error).
         usage = cut.completion.usage
