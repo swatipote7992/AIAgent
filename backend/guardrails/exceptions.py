@@ -16,3 +16,17 @@ def blocked_input_message(reason: str) -> str:
         "content_filter": "This question violates content policy. Please ask about the insurance policies directly.",
     }
     return messages.get(reason, "This question could not be answered.")
+
+
+# A generated answer blocked before it reached the user. The message is a short category, never the answer text;
+# blocked_output_message() turns it into what the user sees.
+class OutputBlockedError(RuntimeError):
+    pass
+
+
+def blocked_output_message(reason: str) -> str:
+    messages = {
+        "prompt_leakage": "I can't share that. Please ask about what the policy documents say instead.",
+        "invented_citation": "That answer could not be verified against the policy documents. Please rephrase your question.",
+    }
+    return messages.get(reason, "This answer could not be returned.")

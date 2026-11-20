@@ -809,14 +809,13 @@ Steps taken to see where the time goes for one question. Before this, the API wr
 To do, one by one (delete each item when it is done):
 
 - Make the retrieval check look at chunks, not pages, and store the retrieved chunks in the results.
-- Handle a prompt blocked by Azure's content filter (a 400 error) with a clear message instead of the raw error, and count it as a pass for the safety cases in the evals.
 - Look at search for comparison questions (it returns 4 chunks; a question about two policies may need more).
 - Decide which system prompt version to keep, then review the golden dataset and set the gate pass marks ([gate_thresholds.py](backend/evals/gate_thresholds.py)) from the result.
 - Create an Azure budget alert on `insu_rag_rg` so a cost surprise reaches you (needs an action group with an email; none exists yet).
 - After the public release, check on the live app that the per-visitor limit works for different visitors (see the `X-Forwarded-For` note in step 35).
 - Make the `llm_generation` and `embedding` spans show up on Azure AI Foundry's new Traces page (see step 37: tried `SpanKind.CLIENT` and the `gen_ai.system` attribute, reverted because it did not show the spans there either).
 - Run the full 42-case, 3-version eval comparison through the new Foundry-uploading path (step 39; confirmed working on a 2-case test).
-- Add output guardrails (system-prompt leakage, invented citations, live groundedness) to match the input guardrails (steps 41, 42).
+- Add output guardrails (system-prompt leakage, invented citations, live groundedness) to match the input guardrails (steps 41, 42, deployed in step 43).
 - `az monitor app-insights component list` errors with "'list' is misspelled..." from the `application-insights` CLI extension (step 38); find a reliable replacement (`az resource list --resource-type Microsoft.Insights/components` worked) and use it in [deploy.ps1](deploy.ps1).
 
 - Check the continuation and the fallbacks with the real Azure model (for example one question with `LLM_MAX_TOKENS=30`), since all of it was tested only against fake servers.

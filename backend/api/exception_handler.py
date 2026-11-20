@@ -3,7 +3,7 @@ import logging
 from api.rate_limiter import all_visitors_key
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from guardrails.exceptions import InputBlockedError, blocked_input_message
+from guardrails.exceptions import InputBlockedError, OutputBlockedError, blocked_input_message, blocked_output_message
 from slowapi.errors import RateLimitExceeded
 from utility.continuation_handler import AnswerBlockedError, AnswerTruncatedError
 from utility.timeout_handler import RequestTimeoutError
@@ -25,6 +25,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def input_blocked(request: Request, error: InputBlockedError):
         log.warning("question blocked by input guardrail: %s", error)  # the reason category only, never the question
         return JSONResponse(status_code=422, content={"detail": blocked_input_message(str(error))})
+
+    @app.exception_handler(OutputBlockedError)
+    async def output_blocked(request: Request, error: OutputBlockedError):
+        log.warning("answer blocked by output guardrail: %s", error)  # the reason category only, never the answer
+        return JSONResponse(status_code=422, content={"detail": blocked_output_message(str(error))})
 
     @app.exception_handler(AnswerBlockedError)
     async def answer_blocked(request: Request, error: AnswerBlockedError):

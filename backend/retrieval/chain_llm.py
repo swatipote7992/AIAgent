@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from retrieval.retrieval import get_retriever
 from guardrails.content_filter_middleware import check_content_filter_error
 from guardrails.input_guardrails import input_guardrails
+from guardrails.output_guardrails import output_guardrails
 from observability.tracing import traced
 from data.prompts import load_continue_prompt, load_system_prompt
 from opentelemetry import trace
@@ -197,6 +198,7 @@ def ask_llm(question: str) -> dict:
     chunks = retrieve_chunks(question)
     prompt, context = build_prompt(chunks)
     reply = generate_reply(prompt, context, question)
+    output_guardrails(reply.answer, chunks)
 
     return {
         "answer": reply.answer,
