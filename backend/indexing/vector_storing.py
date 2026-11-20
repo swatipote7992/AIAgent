@@ -8,19 +8,16 @@ from dotenv import load_dotenv
 from indexing.data_embedding import get_embedding_model
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from langchain_core.documents import Document
+from utility.require_settings import require_settings
 
 load_dotenv()  # reads the Azure settings from the .env file
-
-REQUIRED_SETTINGS = ("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
 
 def create_vector_store() -> AzureSearch:
     """Connect to the Azure AI Search index for indexing. LangChain creates the index if it does not exist.
-    The query-time version (a timeout and retries on the search client) is answering/retrieval.py.
+    The query-time version (a timeout and retries on the search client) is retrieval/vector_store.py.
     """
-    missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
+    require_settings("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
     return AzureSearch(
         azure_search_endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],

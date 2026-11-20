@@ -3,10 +3,9 @@ import os
 from dotenv import load_dotenv
 from retrieval.embeddings import get_embedding_model
 from langchain_community.vectorstores.azuresearch import AzureSearch
+from utility.require_settings import require_settings
 
 load_dotenv()  # reads the Azure settings from the .env file
-
-REQUIRED_SETTINGS = ("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
 
 def create_vector_store() -> AzureSearch:
@@ -15,9 +14,7 @@ def create_vector_store() -> AzureSearch:
     not exist, so only /ready (which must not do that) uses a plain SearchClient instead.
     The indexing-time version (library defaults, no query timeout) is indexing/vector_storing.py.
     """
-    missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
+    require_settings("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
     timeout = float(os.environ.get("SEARCH_TIMEOUT_SECONDS", "10"))
     # Options of the Azure SDK client: seconds to connect and to read, and how often it retries a failed call.

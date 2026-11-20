@@ -6,13 +6,12 @@ from dotenv import load_dotenv
 from langchain_openai import AzureOpenAIEmbeddings
 from observability.tracing import traced
 from opentelemetry import trace
+from utility.require_settings import require_settings
 from utility.transient_error_checker import is_transient
 
 load_dotenv(override=True)  # .env wins over variables already set in the shell
 
 log = logging.getLogger("embeddings")
-
-REQUIRED_SETTINGS = ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY")
 
 
 def _client_options() -> dict:
@@ -66,9 +65,7 @@ def get_embedding_model() -> AzureOpenAIEmbeddings:
     """The embedding model used to embed a question at answer time: tracing and a fallback deployment.
     The indexing-time model (library defaults, no tracing) is indexing/data_embedding.py.
     """
-    missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
+    require_settings("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY")
 
     return TracedEmbeddings(
         azure_deployment=os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small"),
