@@ -814,6 +814,7 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - Live groundedness scoring (reusing the eval judges on the real answer) is left as a to-do, since it costs a model call per request and needs a latency/cost decision first.
 45. **Amended the Spec Kit constitution to v1.1.0** (via `/speckit-constitution`). Principle II (FastAPI Backend Conventions) now requires `gen_ai.operation.name`/`gen_ai.provider.name` attributes on every span that calls an AI service — a convention already used in the API and retrieval code but not previously written down anywhere.
 46. **Imported the constitution into [CLAUDE.md](CLAUDE.md) with a `@.specify/memory/constitution.md` reference**, instead of hand-copying a summary. The constitution file only used to load when a Spec Kit skill ran; CLAUDE.md loads automatically every session, so Claude Code's `@path` import makes the full constitution load every session too, with no duplicate text to drift out of sync.
+47. **Built a `/create-pr` skill**, [SKILL.md](.claude/skills/create-pr/SKILL.md), scoped to exactly the currently staged files (not the whole branch). It runs the project's quality gates (naming, secrets, backend `pip check`/`pytest`, frontend `npm run build`, README-updated check), shows a pass/fail table, and only on explicit approval commits with the user's own text verbatim, pushes, and opens a PR against `main` with `gh`. This is the one case where the skill commits on the user's behalf — every other git workflow in this project stays commit-by-hand.
 
 ## Next steps
 
