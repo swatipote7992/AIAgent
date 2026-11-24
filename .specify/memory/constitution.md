@@ -1,13 +1,9 @@
 <!--
 SYNC IMPACT REPORT (temporary scratch, remove before committing)
-Version change: (unfilled template) -> 1.0.0
-Modified principles: none (first ratification)
-Added principles: I. Test-First; II. FastAPI Backend Conventions; III. React and TypeScript
-  Frontend Conventions; IV. Secrets Are Never Printed or Logged; V. No Credentials in Git;
-  VI. Pinned pip Dependencies; VII. Every Step Is Documented in the README; VIII. Honest
-  Reporting; IX. Deployment Safety
-Added sections: Technology and Security Constraints; Development Workflow and Quality Gates;
-  Governance
+Version change: 1.0.0 -> 1.1.0
+Modified principles: II. FastAPI Backend Conventions (added a gen_ai span-attribute
+  instrumentation requirement; no renaming)
+Added sections: none
 Removed sections: none
 Follow-up TODOs:
   - The repository has no automated tests yet. Principle I applies to new work from now on;
@@ -46,6 +42,9 @@ The backend MUST follow these rules:
   testable without starting the server.
 - Logging MUST be structured and meaningful (duration, counts, source files, error reason)
   and MUST NOT contain secrets or question text.
+- Every OpenTelemetry span that calls an Azure OpenAI (or other AI) service MUST set the
+  `gen_ai.operation.name` and `gen_ai.provider.name` attributes, consistent with the existing
+  instrumentation in the API and retrieval code.
 
 ### III. React and TypeScript Frontend Conventions
 The frontend MUST use strict TypeScript with no implicit `any`. All calls to the backend
@@ -139,4 +138,4 @@ and review MUST check compliance with these principles, and any deviation MUST b
 in writing in the plan or pull request. Runtime guidance for the coding agent is in
 `CLAUDE.md`.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-16 | **Last Amended**: 2026-11-16
+**Version**: 1.1.0 | **Ratified**: 2026-11-16 | **Last Amended**: 2026-11-24

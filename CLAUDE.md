@@ -12,6 +12,12 @@ A RAG app over fictional car insurance policy PDFs: LangChain, Azure OpenAI (`te
 - Package management is **pip + `backend/requirements.txt`** (pinned). uv was dropped for the project; `uvx` is only used to run Spec Kit.
 - Be honest in reports: say what was verified and what was not. Do not claim something works in Azure unless it was checked there.
 
+## Constitution (always applies, even without Spec Kit)
+
+@.specify/memory/constitution.md
+
+This import makes the project constitution load automatically every session, not only when a Spec Kit skill runs. It is the source of truth for project principles; amend it with `/speckit-constitution`, never by editing it directly.
+
 ## Commands
 
 Windows, PowerShell. Run backend commands from `backend/` with the virtual environment active.
@@ -63,4 +69,4 @@ Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, enviro
 
 ## Spec Kit
 
-Spec Kit skills are installed in `.claude/skills/` (`/speckit-constitution`, `/speckit-specify`, `/speckit-plan`, `/speckit-tasks`, `/speckit-implement`) with their files in `.specify/`. Project principles belong in the constitution (`/speckit-constitution`), not in this file.
+Spec Kit skills are installed in `.claude/skills/` (`/speckit-constitution`, `/speckit-specify`, `/speckit-plan`, `/speckit-tasks`, `/speckit-implement`) with their files in `.specify/`. Project principles are written in full in the constitution, imported above so they load every session; amend it with `/speckit-constitution`, not by editing this file.

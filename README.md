@@ -803,6 +803,17 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - **Bug found and fixed along the way:** `InputBlockedError` was never added to the list of errors [ragapi.py](backend/api/ragapi.py) re-raises to the registered handlers, so every input-guardrail block (deterministic, Prompt Shields, and content filter alike) was silently falling through to the generic 502 handler instead of its own clean 422 message. Fixed.
     - Both new spans use the standard `gen_ai.operation.name`/`gen_ai.provider.name` attribute names, same as the chat and embedding spans.
     - **Checking a block in Foundry:** our own span attributes (`guardrail.input_blocked`, `prompt_shields.attack_detected`, `content_filter.categories`) go through Application Insights like every other span (old Foundry portal or a Log Analytics query); Azure's own Prompt Shields/content filter decisions are first-party Azure data and show up in the Foundry portal's own "Guardrails + controls" and "Risks + alerts" pages instead.
+43. **Deployed the input guardrails (steps 41, 42) with the full [deploy.ps1](deploy.ps1).** Backend and frontend rebuilt; `/health` and `/ready` on the live backend both confirmed afterwards (`{"status":"ready","documents":46}`), and the live frontend loads.
+44. **Added output guardrails, then deployed them with a targeted rebuild.** New [output_guardrails.py](backend/guardrails/output_guardrails.py), checked deterministically (regex only, no model call) on the generated answer before it is returned:
+    - `check_prompt_leakage`: blocks an answer that names or quotes the system prompt back (phrases like "my instructions are", "system prompt", or any 8-word run lifted verbatim from the loaded system prompt text).
+    - `check_citation_grounding`: parses `[source, page X]` citations out of the answer and blocks any that cite a source not among the chunks actually retrieved for that question (an invented citation).
+    - Both raise `OutputBlockedError` (new, in [exceptions.py](backend/guardrails/exceptions.py)), handled the same way as the input guardrails: re-raised in [ragapi.py](backend/api/ragapi.py), turned into a 422 with a category-specific message in [exception_handler.py](backend/api/exception_handler.py). Wired into `ask_llm` in [chain_llm.py](backend/retrieval/chain_llm.py), after the answer is generated.
+    - Checked offline (pure regex, no Azure calls needed): a benign cited answer passes, a leaked-instruction answer and an invented-citation answer are both blocked, and three ordinary "I don't know" phrasings are not false-positived by the leakage check.
+    - Deployed with a targeted rebuild (`az acr build` + `az containerapp update`, no new `.env` settings so no need for the full `deploy.ps1`); confirmed live afterwards (`/health` ok, `/ready` 46 documents).
+    - Personal study notes on the whole guardrails pipeline: [guardrail_notes.md](backend/guardrails/guardrail_notes.md).
+    - Live groundedness scoring (reusing the eval judges on the real answer) is left as a to-do, since it costs a model call per request and needs a latency/cost decision first.
+45. **Amended the Spec Kit constitution to v1.1.0** (via `/speckit-constitution`). Principle II (FastAPI Backend Conventions) now requires `gen_ai.operation.name`/`gen_ai.provider.name` attributes on every span that calls an AI service — a convention already used in the API and retrieval code but not previously written down anywhere.
+46. **Imported the constitution into [CLAUDE.md](CLAUDE.md) with a `@.specify/memory/constitution.md` reference**, instead of hand-copying a summary. The constitution file only used to load when a Spec Kit skill ran; CLAUDE.md loads automatically every session, so Claude Code's `@path` import makes the full constitution load every session too, with no duplicate text to drift out of sync.
 
 ## Next steps
 
@@ -815,7 +826,7 @@ To do, one by one (delete each item when it is done):
 - After the public release, check on the live app that the per-visitor limit works for different visitors (see the `X-Forwarded-For` note in step 35).
 - Make the `llm_generation` and `embedding` spans show up on Azure AI Foundry's new Traces page (see step 37: tried `SpanKind.CLIENT` and the `gen_ai.system` attribute, reverted because it did not show the spans there either).
 - Run the full 42-case, 3-version eval comparison through the new Foundry-uploading path (step 39; confirmed working on a 2-case test).
-- Add output guardrails (system-prompt leakage, invented citations, live groundedness) to match the input guardrails (steps 41, 42, deployed in step 43).
+- Add live groundedness scoring as an output guardrail (runs the eval judges on the real answer; needs a latency/cost decision first). Prompt-leakage and invented-citation checks are done (step 44).
 - `az monitor app-insights component list` errors with "'list' is misspelled..." from the `application-insights` CLI extension (step 38); find a reliable replacement (`az resource list --resource-type Microsoft.Insights/components` worked) and use it in [deploy.ps1](deploy.ps1).
 
 - Check the continuation and the fallbacks with the real Azure model (for example one question with `LLM_MAX_TOKENS=30`), since all of it was tested only against fake servers.
