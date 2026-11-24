@@ -7,8 +7,8 @@ CHUNK_OVERLAP = 100  # characters shared between neighbouring chunks so context 
 
 def create_chunk(documents: list[Document]) -> list[Document]:
     """Split pages into smaller overlapping chunks. Each chunk keeps its page's metadata."""
-    splitter = RecursiveCharacterTextSplitter(
+    chunks = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
     )
-    return splitter.split_documents(documents)
+    return chunks.split_documents(documents)

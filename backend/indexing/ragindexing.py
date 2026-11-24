@@ -4,7 +4,7 @@ from indexing.chunking import create_chunk
 from indexing.clean_text import clean_documents
 from indexing.load_pdf import load_pdf
 from indexing.metadata import enrich_metadata
-from vector_embedding.vector_store import store_chunks
+from indexing.vector_storing import store_chunks
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -25,11 +25,11 @@ def index_pipeline(pdf_path: Path):
     print(f"Metadata added to {len(documents)} pages")
 
     # Split the pages into smaller overlapping chunks
-    chunks = create_chunk(documents)
-    print(f"Split into {len(chunks)} chunks")
+    doc_chunks = create_chunk(documents)
+    print(f"Split into {len(doc_chunks)} chunks")
 
     # Embed each chunk and store text, vector and metadata in Azure AI Search
-    ids = store_chunks(chunks)
+    ids = store_chunks(doc_chunks)
     print(f"Stored {len(ids)} chunks in the Azure AI Search index")
 
 

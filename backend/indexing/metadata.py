@@ -4,9 +4,9 @@ from langchain_core.documents import Document
 
 # Values for the sample policy; change them per document when ingesting real policies.
 DEFAULT_POLICY_INFO = {
-    "policy_type": "individual_health",
-    "document_version": "3.2",
-    "product_id": "NH-2026-01",
+    "policy_type": "basic_car_insurance",
+    "document_version": "1.0",
+    "product_id": "PL-2026-01",
     "access_level": "internal",  # e.g. public / internal / underwriters_only, usable as a search filter
 }
 

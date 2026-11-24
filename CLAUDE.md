@@ -6,6 +6,9 @@ A RAG app over fictional car insurance policy PDFs: LangChain, Azure OpenAI (`te
 
 - **Log everything in [README.md](README.md), step by step.** After every action or answer in this project (including installs, failed attempts, Azure changes and drills), add or update a numbered step in the README. When the direction changes, update the current direction and move abandoned approaches to a "Superseded options" section.
 - **No source code in the README.** Link the file path instead, for example `[ragapi.py](backend/api/ragapi.py)`. Shell commands to run are fine.
+- **Never deploy or change the live Azure app unless the owner says so.** Always ask first, every time, even for a small targeted rebuild. Re-indexing needs a yes too.
+- **Name every new file in snake_case with a specific name** (`exception_handler.py`, not `errors.py`; no spaces, no run-together words).
+- **Keep README entries short:** say what was done and why, not how it was tested or deployed.
 - Package management is **pip + `backend/requirements.txt`** (pinned). uv was dropped for the project; `uvx` is only used to run Spec Kit.
 - Be honest in reports: say what was verified and what was not. Do not claim something works in Azure unless it was checked there.
 
@@ -29,19 +32,21 @@ npm run build      # type check + production build
 
 Tests use pytest (dev-only, pinned in [backend/requirements-dev.txt](backend/requirements-dev.txt), not in the Azure image). Run them from `backend/` with the virtual environment active: `pip install -r requirements-dev.txt`, then `python -m pytest`. Today the tests cover the secrets hook ([backend/tests/test_block_secrets.py](backend/tests/test_block_secrets.py)) and the prompt versions ([backend/tests/test_prompts.py](backend/tests/test_prompts.py)); the API, indexing and answering code have none yet.
 
+Evals (AI quality checks against `backend/data/golden_data/`, they call Azure OpenAI and cost money): `python -m evals.run_evals --dry-run` shows the plan, `--retrieval-only` checks only the search, `--versions v1 v2 v3` compares prompt versions, `--gate` fails below the pass marks in `backend/evals/gate_thresholds.py`. Ask before a real run.
+
 Deploy everything to Azure from the repo root: `./deploy.ps1` (needs `az login`).
 
 ## Architecture
 
-- **Indexing** ([backend/indexing/](backend/indexing/)): load PDF, clean, add metadata, chunk, embed and store in Azure AI Search. Run it when documents change. Entry point is `ragindexing.py`; run it as a module (`-m`), never as a file.
-- **Answering** ([backend/answering/](backend/answering/)): `retrieval.py` finds chunks, `insur_llm.py` builds the prompt and calls the chat model.
+- **Indexing** ([backend/indexing/](backend/indexing/)): load PDF, clean, add metadata, chunk, embed ([data_embedding.py](backend/indexing/data_embedding.py)) and store ([vector_storing.py](backend/indexing/vector_storing.py)) in Azure AI Search. Run it when documents change. Entry point is `ragindexing.py`; run it as a module (`-m`), never as a file.
+- **Retrieval** ([backend/retrieval/](backend/retrieval/)): `retrieval.py` and `vector_store.py` find chunks (with a query-time timeout, retries and a fallback embedding deployment), `chain_llm.py` builds the prompt and calls the chat model.
 - **API** ([backend/api/ragapi.py](backend/api/ragapi.py)): `POST /api/ask` (needs the `X-API-Key` header), `GET /health` (liveness) and `GET /ready` (checks the search index). Logging and Azure Monitor (OpenTelemetry) are configured here.
 - **Frontend** ([frontend/src/](frontend/src/)): talks to the API using `VITE_API_URL` and `VITE_API_KEY`.
 - **Documents** ([backend/data/](backend/data/)): mock car policies named `insurance_<brand>_v1.pdf`. The file name without `.pdf` becomes the chunk's `document_type`.
 
 ## Azure setup
 
-Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, environment `insur-rag-env`, scales to zero), image from the registry `insurragacr`. Frontend on Static Web Apps (`insur-rag-web`, invited users only). AI Search service `insuragservice`, Azure OpenAI `insuragopenai`, Application Insights `insur-rag-insights`. Secrets come from the root `.env` (git-ignored; template in [.env.example](.env.example)).
+Resource group `insu_rag_rg`. Backend on Container Apps (`insur-rag-api`, environment `insur-rag-env`, scales to zero), image from the registry `insurragacr`. Frontend on Static Web Apps (`insur-rag-web`). AI Search service `insuragservice`, Azure OpenAI deployments on the Azure AI Foundry account `technopanda92-5275-resource` (chat `gpt-4.1-mini`, embeddings `text-embedding-3-small`; the `insuragopenai` account also exists in the resource group but has no deployments and is unused), Application Insights `insur-rag-insights`. Secrets come from the root `.env` (git-ignored; template in [.env.example](.env.example)).
 
 ## Things that will bite you
 

@@ -15,7 +15,7 @@ AIAgent/
 ├── deploy.ps1           deploys everything to Azure (see "Deploying to Azure")
 ├── frontend/            React + TypeScript + Vite web app
 │   ├── package.json, vite.config.ts, tsconfig.json, index.html
-│   ├── public/          staticwebapp.config.json (sign-in rule for Azure)
+│   ├── public/          staticwebapp.config.json (access rule for Azure)
 │   └── src/             main.tsx, App.tsx, api.ts, types.ts, styles.css
 └── backend/
     ├── .venv/           virtual environment (not in git)
@@ -24,12 +24,12 @@ AIAgent/
     ├── Dockerfile       builds the backend image (used by deploy.ps1)
     ├── indexing/        the indexing phase (run when documents change)
     │   ├── ragindexing.py   entry point: PDF to chunks to index
+    │   ├── data_embedding.py, vector_storing.py   embed and store the chunks
     │   └── load_pdf.py, clean_text.py, metadata.py, chunking.py
-    ├── vector_embedding/   shared by indexing and answering
-    │   └── embeddings.py, vector_store.py
-    ├── answering/       the answering phase (runs for every question)
+    ├── retrieval/       the answering phase (runs for every question)
+    │   ├── embeddings.py, vector_store.py   embed the question, connect to the index
     │   ├── retrieval.py     finds the chunks relevant to a question
-    │   └── insur_llm.py     builds the prompt and calls the chat model
+    │   └── chain_llm.py     builds the prompt and calls the chat model
     ├── api/
     │   └── ragapi.py        FastAPI endpoint used by the frontend
     └── data/            the sample PDFs
@@ -42,16 +42,18 @@ AIAgent/
 | [clean_text.py](backend/indexing/clean_text.py) | Cleans the extracted text |
 | [metadata.py](backend/indexing/metadata.py) | Adds source, page and policy metadata |
 | [chunking.py](backend/indexing/chunking.py) | Splits pages into overlapping chunks |
-| [embeddings.py](backend/vector_embedding/embeddings.py) | Creates the Azure OpenAI embedding model (used by indexing and by retrieval) |
-| [vector_store.py](backend/vector_embedding/vector_store.py) | Connects to the Azure AI Search index; `store_chunks()` embeds and uploads the chunks (used by indexing and by retrieval) |
-| [retrieval.py](backend/answering/retrieval.py) | Retrieves the chunks most relevant to a question |
-| [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `insur_llm.py` |
-| [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
+| [data_embedding.py](backend/indexing/data_embedding.py) | Creates the Azure OpenAI embedding model used while indexing |
+| [vector_storing.py](backend/indexing/vector_storing.py) | Connects to the Azure AI Search index for indexing; `store_chunks()` embeds and uploads the chunks |
+| [embeddings.py](backend/retrieval/embeddings.py) | Creates the Azure OpenAI embedding model used to embed a question at answer time (tracing, timeout, fallback) |
+| [vector_store.py](backend/retrieval/vector_store.py) | Connects to the Azure AI Search index to answer a question (timeout, retries) |
+| [retrieval.py](backend/retrieval/retrieval.py) | Retrieves the chunks most relevant to a question |
+| [api/ragapi.py](backend/api/ragapi.py) | FastAPI server with one endpoint, `POST /api/ask`, which passes the question to `chain_llm.py` |
+| [chain_llm.py](backend/retrieval/chain_llm.py) | `ask_llm(question)`: retrieves the relevant chunks, builds the prompt and calls the chat model |
 | [frontend/](frontend/) | React and TypeScript web app (dark console theme) |
 | [insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [audi](backend/data/insurance_audi_v1.pdf), [bmw](backend/data/insurance_bmw_v1.pdf), [mercedes](backend/data/insurance_mercedes_v1.pdf) | Fictional mock car insurance policies used as input |
 | [deploy.ps1](deploy.ps1) | Deploys the backend (Azure Container Apps) and the frontend (Azure Static Web Apps) |
 | [backend/Dockerfile](backend/Dockerfile) | Builds the backend container image |
-| [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Makes the deployed frontend require sign-in, invited users only |
+| [staticwebapp.config.json](frontend/public/staticwebapp.config.json) | Lets anyone open the deployed frontend, no sign-in (it was invited users only until the public release, see step 35) |
 | [.env.example](.env.example) | Template for the settings in `.env` (project root) |
 | [requirements.txt](backend/requirements.txt) | Pinned dependencies |
 | [.gitignore](.gitignore), [backend/.gitignore](backend/.gitignore) | Keep `.venv`, `.env` and caches out of git |
@@ -139,7 +141,7 @@ cd backend
 python -m indexing.ragindexing
 ```
 
-Run it as a module (`-m`) from `backend/`. Running the file directly (`python indexing/ragindexing.py`) fails with "No module named indexing", because the files in `indexing/` import each other as `indexing.x` and the shared files (`vector_store.py`, `embeddings.py`) by plain name. The PDF path is built from the location of the file, so it does not depend on the folder you run from. Each run re-embeds the PDF's chunks (a small API cost) and updates the same entries in the index.
+Run it as a module (`-m`) from `backend/`. Running the file directly (`python indexing/ragindexing.py`) fails with "No module named indexing", because the files in `indexing/` import each other as `indexing.x`. The PDF path is built from the location of the file, so it does not depend on the folder you run from. Each run re-embeds the PDF's chunks (a small API cost) and updates the same entries in the index.
 
 ### Indexing pipeline
 
@@ -149,14 +151,14 @@ Run it as a module (`-m`) from `backend/`. Running the file directly (`python in
 | 2 | Clean the text | [clean_text.py](backend/indexing/clean_text.py) | `clean_documents()` | cleaned pages |
 | 3 | Add metadata | [metadata.py](backend/indexing/metadata.py) | `enrich_metadata()` | pages with source, page and policy metadata |
 | 4 | Split into chunks | [chunking.py](backend/indexing/chunking.py) | `create_chunk()` | overlapping chunks, each with metadata |
-| 5 | Embed and store the chunks | [vector_store.py](backend/vector_embedding/vector_store.py) (uses the model from [embeddings.py](backend/vector_embedding/embeddings.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
+| 5 | Embed and store the chunks | [vector_storing.py](backend/indexing/vector_storing.py) (uses the model from [data_embedding.py](backend/indexing/data_embedding.py)) | `store_chunks()` | chunks, vectors and metadata in the Azure AI Search index |
 
 Answering then runs on the stored index, for every question:
 
 | # | Stage | File | Function | Output |
 | --- | --- | --- | --- | --- |
-| 6 | Retrieve relevant chunks | [retrieval.py](backend/answering/retrieval.py), called by [insur_llm.py](backend/answering/insur_llm.py) | `get_retriever()` | the 4 chunks most relevant to the question |
-| 7 | Generate the answer | [insur_llm.py](backend/answering/insur_llm.py) | `ask_llm()` | the answer, with sources |
+| 6 | Retrieve relevant chunks | [retrieval.py](backend/retrieval/retrieval.py), called by [chain_llm.py](backend/retrieval/chain_llm.py) | `get_retriever()` | the 4 chunks most relevant to the question |
+| 7 | Generate the answer | [chain_llm.py](backend/retrieval/chain_llm.py) | `ask_llm()` | the answer, with sources |
 
 Each stage is described below in the same order.
 
@@ -220,11 +222,11 @@ Verified: the 27 pages of the three documents (14 + 6 + 7) become 27 chunks, the
 
 Why 1000 and not 500: with 500 characters the authority table in `underwriting_rules.pdf` was split between two chunks, with the "Senior underwriter" row label at the end of one and its values at the start of the next. Search returned only the second chunk, and the question "Who can approve a total loading of +60%?" got a hedging answer. With one chunk per page the same question is answered correctly (a senior underwriter, page 2). Longer pages than these would still be split, so check the chunk size again if you add documents with long pages or large tables.
 
-## Stage 5: Embed and store the chunks ([vector_store.py](backend/vector_embedding/vector_store.py), [embeddings.py](backend/vector_embedding/embeddings.py))
+## Stage 5: Embed and store the chunks ([vector_storing.py](backend/indexing/vector_storing.py), [data_embedding.py](backend/indexing/data_embedding.py))
 
 ### How it works
 
-`get_embedding_model()` in [embeddings.py](backend/vector_embedding/embeddings.py) creates the Azure OpenAI embedding model from the `.env` settings. `store_chunks()` in [vector_store.py](backend/vector_embedding/vector_store.py) creates an `AzureSearch` vector store pointing at the Azure AI Search index and calls `add_documents()`. LangChain embeds each chunk and uploads its text, vector and metadata, so there is no separate embedding step in `ragindexing.py`.
+`get_embedding_model()` in [data_embedding.py](backend/indexing/data_embedding.py) creates the Azure OpenAI embedding model from the `.env` settings. `store_chunks()` in [vector_storing.py](backend/indexing/vector_storing.py) creates an `AzureSearch` vector store pointing at the Azure AI Search index and calls `add_documents()`. LangChain embeds each chunk and uploads its text, vector and metadata, so there is no separate embedding step in `ragindexing.py`.
 
 Background on embeddings:
 
@@ -264,13 +266,13 @@ You can check the same things in the Azure portal: the document count, and the v
 - Metadata is stored as one field, so it cannot be used for filtering. To filter on `access_level` or `document_version`, the index fields have to be defined explicitly.
 - `langchain-community` prints a deprecation warning saying it is being sunset. It does not affect the pipeline today.
 
-## Stage 6: Retrieve relevant chunks ([retrieval.py](backend/answering/retrieval.py))
+## Stage 6: Retrieve relevant chunks ([retrieval.py](backend/retrieval/retrieval.py))
 
 ### How it works
 
-`get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](backend/vector_embedding/vector_store.py), so retrieval automatically uses the same embedding model and index name as indexing. It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
+`get_retriever()` connects to the existing index through `create_vector_store()` in [vector_store.py](backend/retrieval/vector_store.py), so retrieval uses the same embedding deployment and index name as indexing (a separate, query-time embedding model in [embeddings.py](backend/retrieval/embeddings.py), with a timeout, retries and a fallback deployment; indexing's own model is [data_embedding.py](backend/indexing/data_embedding.py)). It turns the store into a retriever with `as_retriever`, and `retrieve(question)` calls `retriever.invoke(question)` and returns the chunks. Each chunk has `page_content` and `metadata`, so answers can cite the source and page.
 
-[insur_llm.py](backend/answering/insur_llm.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks. `retrieve(question)` in [retrieval.py](backend/answering/retrieval.py) does the same in one call.
+[chain_llm.py](backend/retrieval/chain_llm.py) calls `get_retriever()` and then `retriever.invoke(question)` to get the chunks.
 
 ### Search types
 
@@ -295,11 +297,11 @@ You can check the same things in the Azure portal: the document count, and the v
 
 - `semantic_hybrid` needs a semantic configuration on the index, and semantic ranking enabled on the search service. The index was created without one, so it must be recreated (delete the index and re-run `python -m indexing.ragindexing`) with the configuration defined.
 
-## Stage 7: Generate the answer ([insur_llm.py](backend/answering/insur_llm.py))
+## Stage 7: Generate the answer ([chain_llm.py](backend/retrieval/chain_llm.py))
 
 ### How it works
 
-[insur_llm.py](backend/answering/insur_llm.py) answers one question in `ask_llm(question)`. It is called by the API for every request. It builds three plain objects once and reuses them:
+[chain_llm.py](backend/retrieval/chain_llm.py) answers one question in `ask_llm(question)`. It is called by the API for every request. It builds three plain objects once and reuses them:
 
 1. `llm`: `AzureChatOpenAI` with your chat deployment (`gpt-4.1-mini` by default). Temperature is 0, so the same question gives the same answer.
 2. `prompt`: a `ChatPromptTemplate` with two inputs, `{context}` (the chunks) and `{question}`.
@@ -335,21 +337,21 @@ The context uses `page_label`, the number a reader sees in a PDF viewer (the 13t
 
 A simple web app on top of the same pipeline. It is deliberately minimal for now: ask a question, read the answer, see which chunks were retrieved. More features can be added later.
 
-### API ([api/ragapi.py](backend/api/ragapi.py) and [insur_llm.py](backend/answering/insur_llm.py))
+### API ([api/ragapi.py](backend/api/ragapi.py) and [chain_llm.py](backend/retrieval/chain_llm.py))
 
 The API is split in two files:
 
 - [api/ragapi.py](backend/api/ragapi.py) is the web layer. It defines one endpoint, `POST /api/ask`, checks the request (`{"question": "..."}`, 1 to 1000 characters) and passes the question to `ask_llm()`. An empty question gets a 422 response, and any failure while answering (for example Azure not reachable) gets a 502 with the error message.
-- [insur_llm.py](backend/answering/insur_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/answering/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
+- [chain_llm.py](backend/retrieval/chain_llm.py) does the work in `ask_llm(question)`: it retrieves the relevant chunks with [retrieval.py](backend/retrieval/retrieval.py), joins them into a context string with source and page, and calls the chat model. The model and retriever are created once and reused for every question.
 
 Two protections were added for the deployed version:
 
 - **CORS.** The frontend and the backend are on different addresses, so [ragapi.py](backend/api/ragapi.py) allows calls only from the frontend addresses listed in the `CORS_ORIGINS` setting (default `http://localhost:5173`), POST only.
 - **API key.** `POST /api/ask` needs an `X-API-Key` header equal to the `API_KEY` setting. If `API_KEY` is not set (local development) the check is skipped. Without or with a wrong key the answer is 401.
 
-The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [insur_llm.py](backend/answering/insur_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
+The response is `{"answer": "...", "followups": ["...", ...], "chunks": [{"source", "page", "title", "text"}, ...]}`. `followups` holds up to 3 suggested next questions (empty when the model does not know the answer). The model returns them in the same call as the answer, using a structured output (`Reply` in [chain_llm.py](backend/retrieval/chain_llm.py)), and the prompt asks for questions that are complete on their own and answerable from the retrieved context.
 
-The prompt lives only in [insur_llm.py](backend/answering/insur_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
+The prompt lives only in [chain_llm.py](backend/retrieval/chain_llm.py). The API only answers questions from what is already in the index; it does not index anything (run `ragindexing.py` for that).
 
 ### Frontend ([frontend/](frontend/))
 
@@ -396,7 +398,7 @@ Open http://localhost:5173. To check types and make a production build: `npm run
 - Saved conversation history (the chat resets on reload).
 - Highlighting which chunks the answer actually cited.
 - Streaming the answer as it is written.
-- Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is protected by the frontend sign-in plus the shared API key (see "Deploying to Azure").
+- Per-user login on the API. Locally it has none, so only run it on your own machine. The deployed version is public (after the release in step 35) and is protected by the rate limit and daily ceiling in [rate_limiter.py](backend/api/rate_limiter.py) plus the shared API key (see "Deploying to Azure").
 
 ## Deploying to Azure
 
@@ -416,8 +418,8 @@ Live addresses:
 ### Decisions
 
 - **Two hosts with CORS** instead of one container serving both. I first built a version where FastAPI served the built frontend (one container, no CORS). Direction changed to two hosts, so the static-file code was removed from [ragapi.py](backend/api/ragapi.py) and CORS was added.
-- **Who can use it: you and a few invited people.** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) lets only users with the `invited` role open the frontend, signing in with a Microsoft account.
-- **The backend has its own protection.** The sign-in only covers the frontend page, so the backend also needs the shared `API_KEY`, otherwise anyone who found its address could run up Azure OpenAI costs.
+- **Who can use it: everyone, once the public release in step 35 is deployed.** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) now allows anonymous visitors. Until that release is deployed the live site still lets only users with the `invited` role in, through a Microsoft sign-in.
+- **The backend protects itself.** The shared `API_KEY` is readable in the page, so it only stops casual calls. What limits the cost is the per-visitor rate limit and the daily ceiling for all visitors ([rate_limiter.py](backend/api/rate_limiter.py)).
 - **Secrets stay out of git and out of the image.** [backend/.dockerignore](backend/.dockerignore) keeps `.env` out of the image. [deploy.ps1](deploy.ps1) reads `.env` at run time and stores each value as a Container Apps secret.
 
 ### How to deploy
@@ -430,7 +432,7 @@ Live addresses:
    - Creates the Static Web App first, because its address must go into `CORS_ORIGINS`.
    - Creates the Container Apps environment and the backend app with all settings as secrets, plus a new random `API_KEY`.
    - Builds the frontend against the backend address and key, and uploads it.
-4. Invite yourself (the frontend lets in invited users only). Use a Microsoft account email:
+4. Only while the site is invite-only: invite yourself (the frontend lets in invited users only). Use a Microsoft account email:
 
 ```powershell
 az staticwebapp users invite --name insur-rag-web --resource-group insu_rag_rg --authentication-provider aad --user-details <your-microsoft-email> --domain white-dune-05b8e1a0f.8.azurestaticapps.net --roles invited --invitation-expiration-in-hours 24
@@ -451,7 +453,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 
 - The backend `/docs` page returns 200.
 - `POST /api/ask` without the key returns 401.
-- The frontend address redirects to the Microsoft sign-in (302).
+- (Invite-only setup) The frontend address redirects to the Microsoft sign-in (302).
 - The CORS preflight from `http://localhost:5173` that asks to send the key header returns 200 (tested locally).
 - `npm run build` passes with the new [api.ts](frontend/src/api.ts).
 - Inviting a user, signing in and getting an answer from the deployed site was done and confirmed by you. I did not check it myself, and I made no call with the correct key from here because it would call Azure OpenAI.
@@ -459,7 +461,7 @@ Running [deploy.ps1](deploy.ps1) again is safe. It deletes and recreates the bac
 ### Things to know
 
 - **First question after idle is slow.** The backend scales to zero, so it can take 10 to 30 seconds to start.
-- **The key is in the frontend code.** The `API_KEY` is built into the frontend JavaScript. Only invited, signed-in users can load it, but any of them could read it. It protects against strangers, not against invited users.
+- **The key is in the frontend code.** The `API_KEY` is built into the frontend JavaScript, so with a public site anyone can read it. It is not a secret; the rate limit and the daily ceiling are the real protection.
 - **Cost.** The Basic registry costs a few pounds a month. Container Apps and Static Web Apps cost almost nothing at this size.
 - **Do not delete the resource group `insu_rag_rg`.** It also contains `insuragservice` (AI Search) and `insuragopenai` (Azure OpenAI). To remove only this app, delete the container app, the Container Apps environment, the static web app and the registry one by one.
 - **Different names.** Names must be unique across Azure. Anyone else using [deploy.ps1](deploy.ps1) has to change the names at the top.
@@ -480,7 +482,7 @@ The earlier documents (`insurance_policy.pdf`, `underwriting_rules.pdf` and `cla
 
 The documents changed: the three earlier PDFs were replaced by four mock car insurance PDFs ([insurance_generic_v1.pdf](backend/data/insurance_generic_v1.pdf), [insurance_audi_v1.pdf](backend/data/insurance_audi_v1.pdf), [insurance_bmw_v1.pdf](backend/data/insurance_bmw_v1.pdf) and [insurance_mercedes_v1.pdf](backend/data/insurance_mercedes_v1.pdf)). Because the content is different, the index is rebuilt from scratch instead of updating the old one.
 
-1. **New index.** A new index named `insurance-policies-v2` is used, in the same Azure AI Search service (`insuragservice`). The old index `insurance-policies` is left untouched. The name is the default in [vector_store.py](backend/vector_embedding/vector_store.py) and is listed in [.env.example](.env.example). It can be overridden with `AZURE_SEARCH_INDEX`.
+1. **New index.** A new index named `insurance-policies-v2` is used, in the same Azure AI Search service (`insuragservice`). The old index `insurance-policies` is left untouched. The name is the default in [vector_storing.py](backend/indexing/vector_storing.py) (and in [vector_store.py](backend/retrieval/vector_store.py), which must point at the same index) and is listed in [.env.example](.env.example). It can be overridden with `AZURE_SEARCH_INDEX`.
 2. **Run the indexing pipeline again** from inside `backend/` with the virtual environment active:
 
 ```powershell
@@ -537,7 +539,7 @@ What it shows:
 
 ### Adding more documents later
 
-Question: if more documents are added, is a new index needed? No. Put the new PDF in `backend/data/` and run `python -m indexing.ragindexing` again against the same index. Before storing, [vector_store.py](backend/vector_embedding/vector_store.py) removes the old entries of each file being indexed (the "Removed N old entries" line), so unchanged files are simply refreshed and new files are added. A new index is only needed when the structure changes: a different embedding model or vector size, or new metadata fields in the index.
+Question: if more documents are added, is a new index needed? No. Put the new PDF in `backend/data/` and run `python -m indexing.ragindexing` again against the same index. Before storing, [vector_storing.py](backend/indexing/vector_storing.py) removes the old entries of each file being indexed (the "Removed N old entries" line), so unchanged files are simply refreshed and new files are added. A new index is only needed when the structure changes: a different embedding model or vector size, or new metadata fields in the index.
 
 ### Five more brands added
 
@@ -750,8 +752,75 @@ Steps taken to see where the time goes for one question. Before this, the API wr
     - **Assumption you should check:** the brand text is right and the table was wrong. If you would rather have GBP 1,500 everywhere, the originals are in git (`git checkout -- backend/data/<file>`).
     - **Example updated:** the Toyota key example in [sys_prompt_v3.py](backend/data/prompts/sys_prompt_v3.py) no longer shows a conflict (it now answers GBP 700). The rule about reporting two conflicting figures stays, worded as "if the context ever gives two different figures".
     - **Not done:** the index `insurance-policies-v2` in Azure AI Search still holds the old chunks with GBP 1,500, so the app will keep giving the old table figure until the five files are re-indexed with `python -m indexing.ragindexing` (replaces each file's chunks by name; calls Azure OpenAI and costs a little). I did not run it. Nothing was committed.
+32. **Added a `max_tokens` cap** (1,000 by default, changeable with `LLM_MAX_TOKENS`) to the chat model in [insur_llm.py](backend/answering/insur_llm.py). Before this nothing limited the reply, or set a timeout or retries. A cap that is too low cuts the structured reply and makes the call fail, so keep it above a full answer plus follow-ups.
+33. **Finish reason on the span, and continuing a cut-off answer** (to-do item 3, now removed).
+    - **Recording:** the `llm_generation` span in [insur_llm.py](backend/answering/insur_llm.py) now carries `gen_ai.response.finish_reasons` (`stop` is a normal end, `length` means the `LLM_MAX_TOKENS` cap cut the reply), `gen_ai.request.max_tokens` and `llm.continuations`. The handler that collects the reasons is in [utility/finish_reason_handler.py](backend/utility/finish_reason_handler.py). A call that raises never reaches the handler's end-of-call hook, so its error hook records the reason instead: `length` for a cut-off structured reply, `content_filter` for a filtered one, and `error:<exception class>` for any other failure (the class name only, never the message). A query to see the values is in [scripts.md](scripts.md).
+    - **Continuing:** the caught error carries the partial text. It is sent back to the model as an AI message with an instruction to carry on without repeating itself, at most 3 times ([utility/continuation_handler.py](backend/utility/continuation_handler.py)). The pieces are joined and read as the normal reply. If it is still cut after 3 rounds, the joined text is not a valid reply, or a call ends for any reason other than `stop` or `length` (for example the content filter), the question fails with a clear error that names the cause.
+    - **Structure:** `generate_reply` in [insur_llm.py](backend/answering/insur_llm.py) was split into `build_llm`, `invoke_with_continuation` and `record_llm_attributes`; behaviour is unchanged.
+    - **Versioned "carry on" instruction:** the text that asks the model to continue moved out of the code into [continue_prompt_v1.py](backend/data/prompts/continue_prompt_v1.py), next to the system prompts. [prompts/__init__.py](backend/data/prompts/__init__.py) loads it with `load_continue_prompt`; the setting `CONTINUE_PROMPT_VERSION` picks a version (empty means the latest), and the span records `continue_prompt.version`. To change the wording, add `continue_prompt_v2.py`.
+    - **Not confirmed with the real model:** how Azure `gpt-4.1-mini` actually continues a half-written JSON reply is unknown. Not live yet.
+
+34. **Timeouts, retries, fallbacks and one time budget** (to-do item, now removed). Before this only library defaults applied. The design follows what the research on retries and timeouts recommends (sources are mostly engineering articles, not official standards): each call is retried in exactly one place, one deadline covers the request, and our own errors become HTTP responses in one place. Settings and defaults are in [.env.example](.env.example).
+    - **One retry owner per call:** the OpenAI client retries the chat and embedding calls (backoff, jitter and `Retry-After` included) and the Azure SDK client retries the search calls. No retry loop of our own exists, and the request is not retried as a whole, because stacked retries multiply (a first version of this step did stack them and could make about 8 model calls for one question). [utility/transient_error_checker.py](backend/utility/transient_error_checker.py) only decides whether an error that is still failing after those retries may go to the fallback.
+    - **Chat model** ([insur_llm.py](backend/answering/insur_llm.py)): 25 s per attempt (never more than the time left), 1 client retry, then the optional fallback deployment `AZURE_OPENAI_CHAT_FALLBACK_DEPLOYMENT` (span `llm.fallback_used`).
+    - **Question embedding** ([embeddings.py](backend/vector_embedding/embeddings.py)): 10 s, 2 client retries, then the optional fallback deployment `AZURE_OPENAI_EMBEDDING_FALLBACK_DEPLOYMENT` (span `embedding.fallback_used`). It must be the same model as the primary, because another model gives vectors that do not match the index. Indexing keeps the old defaults.
+    - **AI Search** ([vector_store.py](backend/vector_embedding/vector_store.py)): the search client has a 10 s connect and read timeout and 2 retries with backoff.
+    - **One deadline** ([utility/timeout_handler.py](backend/utility/timeout_handler.py)): `/api/ask` has a budget of 60 s (`REQUEST_TIMEOUT_SECONDS`) kept in a context variable. No new model call or continuation starts after it has passed, and each model call's timeout is capped by the time left. When it runs out the client gets a 504. Python cannot stop a running thread, so the worker thread ends on its own, but it starts nothing new.
+    - **Error responses** ([api/exception_handler.py](backend/api/exception_handler.py)): our own errors are registered once and become 504 (out of time), 422 (stopped by the content filter) and 502 (answer still cut off after 3 continuations), all as `{"detail": ...}`; any other failure is a 502 as before. The responses carry the CORS headers.
+    - **Known limits:** the search index client that LangChain creates at the first question uses the Azure SDK's default retries, which can be long if the index is down. Fully cancelling in-flight calls would need an async rewrite of the pipeline. No fallback deployments exist yet, so both fallback settings are empty. Not live yet.
+35. **Making the app public, with limits** (you chose "public with limits"; deployed on 18 November 2026 with the full [deploy.ps1](deploy.ps1)). The deployed site only let invited Microsoft accounts in, and the backend relied on a key that sits in the page, so removing the sign-in alone would have left no cost protection.
+    - **Frontend:** [staticwebapp.config.json](frontend/public/staticwebapp.config.json) now allows anonymous visitors, and the sign-in redirect is gone. The comment in [api.ts](frontend/src/api.ts) and the messages at the end of [deploy.ps1](deploy.ps1) now say the key is not a secret.
+    - **Rate limits** ([api/rate_limiter.py](backend/api/rate_limiter.py), applied in [ragapi.py](backend/api/ragapi.py), using the `slowapi` package pinned in [requirements.txt](backend/requirements.txt)): per visitor 6 questions a minute and 60 an hour, and 1,000 questions a day for everyone together. A refused question gets a 429 with `Retry-After` and a plain message, which the frontend already shows ([exception_handler.py](backend/api/exception_handler.py)). Calls with a wrong key are refused first and do not use up anyone's allowance. The three numbers are settings in [.env.example](.env.example) and were chosen by me, so adjust them to your budget.
+    - **Who counts as one visitor:** the last `X-Forwarded-For` address, which the Azure proxy adds itself; entries a visitor writes earlier in that header cannot dodge the limit.
+    - **Known limits:** the counters are in the container's memory, so they restart from zero when the container restarts or scales to zero, and the daily ceiling is a safety net, not an exact count. They work because the app runs as one replica. Whether Azure's proxy really puts the visitor's address last in that header is not checked on the live app; if it does not, every visitor shares one limit, which protects the cost but can block real users. The API's own `/docs` page is also public. The key in the page is readable by anyone, so the limits and a budget alert are the protection. The nearest cost risk is a determined person with many addresses; per-user sign-in on the API would be the real fix.
+    - **Released:** the full [deploy.ps1](deploy.ps1) recreated the backend (new revision `insur-rag-api--0000001`, new API key, as the script always does) and uploaded the public frontend; the backend image also leaves out the eval tooling now ([.dockerignore](backend/.dockerignore)). Checked on the live app: the backend is healthy and ready with 46 documents, the frontend answers 200 with no sign-in redirect, a call with no key gets 401, and the browser preflight from the web address is allowed.
+    - **40 questions on the live app** (the first 40 golden-dataset questions, sent to the deployed `/api/ask` with the same headers the web page uses, one every 11 seconds so the per-visitor limit was never hit; not through the page itself because the Chrome extension was not connected): all 40 returned HTTP 200, all passed the checks without a judge, average 2.4 s, slowest 3.9 s, the first request after the scale-to-zero was not noticeably slower. Caveats: no judge scores were taken, so an answer built from prompt v3's own examples still passes (the Audi and Tesla courtesy car answer repeats the wording of a v3 example); the retrieval check is page-level; the rate limit was not exercised, so it is still unverified on the live app. Results: `backend/evals/results/live_api_run_20261118_150531.json` (local, git-ignored).
+    - **Setting not applied:** `LLM_MAX_TOKENS = 500` in the local `.env` is written with spaces, which the deploy script skips, so the live app still uses the default cap of 1,000. Write it as `LLM_MAX_TOKENS=500` if you want 500 live.
+36. **AI evals** (you chose: compare prompt versions, check retrieval, answer quality, and a gate before deploys, using the Azure AI Evaluation SDK, with the questions drafted from the PDFs). Built, not yet run against Azure.
+    - **Golden dataset** ([golden_dataset_v1.py](backend/data/golden_data/golden_dataset_v1.py), loaded by [golden_data/__init__.py](backend/data/golden_data/__init__.py)): 42 questions drafted from the PDF text, each with a reference answer, the facts that must appear, and the file and page that hold the answer. They cover direct facts (24), comparisons (6), partial answers (2), standard-wording fallback (2), questions the documents cannot answer (6) and safety cases (2). The wording differs from the 60 examples inside prompt v3, but some facts overlap because both come from the same PDFs. Every expected fact was checked to be in its cited page. It has not been reviewed by a person yet.
+    - **Checks without a model** ([answer_checks.py](backend/evals/answer_checks.py), [retrieval_checks.py](backend/evals/retrieval_checks.py)): did the search return the pages that hold the answer, are the expected facts in the answer, are cited files and pages real, does the answer say "I don't know" when it should, did it wrongly refuse, did it leak the system prompt.
+    - **Checks by a judge model** ([judge_evaluators.py](backend/evals/judge_evaluators.py)): groundedness, relevance and completeness (1 to 5) from the Azure AI Evaluation SDK, three judge calls per answer. By default the judge is the same deployment as the app, which tends to flatter it; set `EVAL_JUDGE_DEPLOYMENT` to a different one if you have it.
+    - **Runner** ([run_evals.py](backend/evals/run_evals.py), report in [eval_report.py](backend/evals/eval_report.py)): run from `backend/` with the virtual environment active. `python -m evals.run_evals --dry-run` shows the plan and a rough size, `--retrieval-only` checks only the search, `--versions v1 v2 v3` compares the system prompt versions side by side, `--limit`, `--ids` and `--categories` pick cases, and `--gate` exits with code 1 when a pass mark is missed. Results go to `backend/evals/results/` (git-ignored).
+    - **Gate** ([gate_thresholds.py](backend/evals/gate_thresholds.py)): the pass marks are starting values I chose; nobody has measured them. Set them after the first real run.
+    - **Packages:** `azure-ai-evaluation` and its dependencies are pinned in [requirements-dev.txt](backend/requirements-dev.txt) only, so they are not in the Azure image.
+    - **Cost:** a full run (42 questions, 3 prompt versions) is roughly 126 answers and 378 judge calls, on the order of 1.5 million input tokens by a rough estimate; prices were not looked up.
+    - **Full comparison** (`--versions v1 v2 v3`, all 42 cases, results in `backend/evals/results/eval_20261118_111956.json`): pass rate v1 95%, v2 90%, v3 95%; every fact present 97%, 91%, 97%; judge groundedness 5.00, 4.93, 4.93; relevance 4.61, 4.44, 4.41; completeness 4.68, 4.56, 4.88; wrongly refused to answer 1, 1, 0; invented citations and "I don't know" handling were perfect for all three. With 42 cases one case is about 2 points, so the differences are small and there is no clear winner. Answers took about 2 s each for all three versions. Token use per answer was not recorded.
+    - **What the failures showed:** (1) v2 gave a wrong excess for a 19 year old on a Toyota (the policy says cover is not offered). (2) Search returned the right pages but not the right chunk for the Audi and Tesla courtesy car comparison, so v1 and v2 said Audi has no courtesy car; v3 got it right but the judge scored it 2 out of 5 for groundedness, because its answer matches the examples inside prompt v3 rather than the retrieved text: v3 can answer from its own examples when search misses, which is right today but would repeat stale facts if the PDFs change. (3) On the Mercedes telematics question v2 said AMG models are not eligible (wrong) and v3 hedged and left out the 14 percent. (4) The prompt-injection question was blocked by Azure OpenAI's content filter for all three versions (a 400 error before the model ran), so the app returned its raw error text and the case counted as an app error.
+    - **Limits of the eval itself:** the retrieval check compares pages, not chunks, so it reported "found" for the courtesy car question although the chunk with the answer was missing. The judge is the same model as the app.
+    - **First real run** (`--limit 3 --versions v3`, the first three direct cases): all three passed every check, search found every expected page, and the judge gave 5 out of 5 on groundedness, relevance and completeness. The answers were correct and cited real pages. Three easy cases and a judge that is the same model as the app prove little about quality, so this shows the runner works against Azure, not that v3 is good. The comparison of v1, v2 and v3 has not been run. After each run Python prints a harmless error from LangChain's Azure Search client while it shuts down; the results are already saved by then.
+37. **Fixed the Azure OpenAI resource name in the docs, and checked Foundry tracing.** `insuragopenai` (named in [CLAUDE.md](CLAUDE.md) as the project's Azure OpenAI resource) has no model deployments and is unused. Both `.env` and the live app actually call the Azure AI Foundry account `technopanda92-5275-resource` (chat `gpt-4.1-mini`, embeddings `text-embedding-3-small`), confirmed from the live app's own Application Insights dependency calls. [CLAUDE.md](CLAUDE.md) now names the right account.
+    - **Traces reach Application Insights correctly.** `insur-rag-insights` has the expected `gen_ai.*` attributes and `prompt.version`, confirmed with a Log Analytics query against the workspace tables (`AppRequests`/`AppDependencies`/`AppTraces`); the classic Application Insights query returned nothing for this workspace-based resource, which is what first looked like missing data. The old Foundry portal shows the same data correctly.
+    - **Tried and reverted: Foundry's new Traces page still shows "No project traces yet".** Guessed the `llm_generation` and `embedding` spans needed `SpanKind.CLIENT` (default `INTERNAL`) and the older `gen_ai.system` attribute alongside `gen_ai.provider.name`. Made both changes, confirmed with one real question that the spans were sent with the new shape, and the new Traces page still did not show them. Reverted the code; still on the to-do list.
+38. **Split indexing and retrieval into separate code, and deployed it.** `indexing/data_embedding.py` and `indexing/vector_storing.py` are the indexing-time embedding model and vector store (library defaults, no tracing). `backend/answering/` and `backend/vector_embedding/` are merged into `backend/retrieval/`: `embeddings.py` and `vector_store.py` (query-time only: timeout, retries, fallback deployment), `retrieval.py`, and `insur_llm.py` renamed to `chain_llm.py`. Removed the unused `retrieve()` function from `retrieval.py` (nothing called it). [README.md](README.md) and [CLAUDE.md](CLAUDE.md) point at the new paths; the numbered steps above still show the old ones, since they are a record of what was true at the time.
+    - **Deployed with the full [deploy.ps1](deploy.ps1)** (new revision, new API key, frontend rebuilt). One az command (`az monitor app-insights component list`, used to check the Application Insights resource already exists) errored with "'list' is misspelled or not recognized by the system" from the `application-insights` CLI extension; harmless here because the resource already existed and was *not* duplicated, confirmed afterwards, but on the to-do list since it would behave differently on a resource group that does not already have it. Checked live: `/health` and `/ready` (46 documents) both ok, and a real question through `/api/ask` answered correctly with sources.
+39. **Fixed Foundry's Evaluation page showing no runs.** [judge_evaluators.py](backend/evals/judge_evaluators.py) called `GroundednessEvaluator`/`RelevanceEvaluator`/`ResponseCompletenessEvaluator` directly as plain functions, which only scores locally; only `azure.ai.evaluation.evaluate(..., azure_ai_project=...)` uploads a run to the project's Evaluation page. Added `run_foundry_evaluation()`, which batches a version's answers through `evaluate()` instead. [run_evals.py](backend/evals/run_evals.py) uses it automatically when `AZURE_AI_PROJECT_ENDPOINT` is set (new setting in [.env.example](.env.example); the real project endpoint was added to the local `.env`), otherwise it falls back to the old local-only judging. Tested with 2 real cases: both passed, and the run showed up on the project's Evaluation page (`v1_v3_20261119_173523`, 100% / 2 of 2 passed on all three metrics) — confirmed in the portal. The full 42-case, 3-version comparison has not been re-run through this path yet.
+
+40. **Gave every function in `backend/evals/` a single-line comment** (instead of long ones), and wrote [interview_notes.md](backend/evals/interview_notes.md): personal study notes on how the eval pipeline fits together, for interview prep. Not part of the app's own documentation.
+41. **Added deterministic input guardrails** in a new `backend/guardrails/` folder: [input_guardrails.py](backend/guardrails/input_guardrails.py) checks the question with regex only (no model call) for prompt injection, signs of a real emergency, requests for financial/legal advice, abusive language, a too-long question, and pasted personal data (email, UK National Insurance number, a long card/account/phone-style number of 9+ digits). A match raises `InputBlockedError`, caught in [exception_handler.py](backend/api/exception_handler.py) as a 422 with a category-specific message; the reason category (never the question text) also goes on the `input_guardrails` span. Wired into `ask_llm` in [chain_llm.py](backend/retrieval/chain_llm.py), before retrieval runs. Checked offline against 10 cases including a deliberate false positive ("emergency roadside assistance", a normal policy term) that the first version wrongly blocked; fixed by requiring a real distress word alongside "accident"/"crash" rather than the bare word "emergency".
+42. **Added the model-based input checks, and fixed the raw content-filter error.** Two more files in [backend/guardrails/](backend/guardrails/):
+    - [prompt_shields.py](backend/guardrails/prompt_shields.py): calls Azure AI Content Safety's Prompt Shields (`AZURE_CONTENT_SAFETY_ENDPOINT`, new setting; same account and key as `AZURE_OPENAI_ENDPOINT`) to classify the question for a jailbreak attempt, run after the free regex checks. If the call itself fails (timeout, outage) the question is let through rather than blocking everyone on an Azure incident. Tested for real: a benign question passed, an injection attempt was correctly flagged (`attackDetected: true`).
+    - [content_filter_middleware.py](backend/guardrails/content_filter_middleware.py): Azure's own content filter runs on every chat call and cannot be checked ahead of time; when it blocks the *prompt itself* (not a generated answer, which is the existing `ContentFilterFinishReasonError` handling), the call used to fail as a raw `openai.BadRequestError` that reached the user as the literal Azure error text (the known to-do item from the evals). Caught in `invoke_with_continuation` in [chain_llm.py](backend/retrieval/chain_llm.py) and turned into the same clean `InputBlockedError`. Tested for real against a prompt Azure actually blocks (`error.code == "content_filter"`), confirmed it converts correctly.
+    - **Bug found and fixed along the way:** `InputBlockedError` was never added to the list of errors [ragapi.py](backend/api/ragapi.py) re-raises to the registered handlers, so every input-guardrail block (deterministic, Prompt Shields, and content filter alike) was silently falling through to the generic 502 handler instead of its own clean 422 message. Fixed.
+    - Both new spans use the standard `gen_ai.operation.name`/`gen_ai.provider.name` attribute names, same as the chat and embedding spans.
+    - **Checking a block in Foundry:** our own span attributes (`guardrail.input_blocked`, `prompt_shields.attack_detected`, `content_filter.categories`) go through Application Insights like every other span (old Foundry portal or a Log Analytics query); Azure's own Prompt Shields/content filter decisions are first-party Azure data and show up in the Foundry portal's own "Guardrails + controls" and "Risks + alerts" pages instead.
 
 ## Next steps
+
+To do, one by one (delete each item when it is done):
+
+- Make the retrieval check look at chunks, not pages, and store the retrieved chunks in the results.
+- Look at search for comparison questions (it returns 4 chunks; a question about two policies may need more).
+- Decide which system prompt version to keep, then review the golden dataset and set the gate pass marks ([gate_thresholds.py](backend/evals/gate_thresholds.py)) from the result.
+- Create an Azure budget alert on `insu_rag_rg` so a cost surprise reaches you (needs an action group with an email; none exists yet).
+- After the public release, check on the live app that the per-visitor limit works for different visitors (see the `X-Forwarded-For` note in step 35).
+- Make the `llm_generation` and `embedding` spans show up on Azure AI Foundry's new Traces page (see step 37: tried `SpanKind.CLIENT` and the `gen_ai.system` attribute, reverted because it did not show the spans there either).
+- Run the full 42-case, 3-version eval comparison through the new Foundry-uploading path (step 39; confirmed working on a 2-case test).
+- Add output guardrails (system-prompt leakage, invented citations, live groundedness) to match the input guardrails (steps 41, 42, deployed in step 43).
+- `az monitor app-insights component list` errors with "'list' is misspelled..." from the `application-insights` CLI extension (step 38); find a reliable replacement (`az resource list --resource-type Microsoft.Insights/components` worked) and use it in [deploy.ps1](deploy.ps1).
+
+- Check the continuation and the fallbacks with the real Azure model (for example one question with `LLM_MAX_TOKENS=30`), since all of it was tested only against fake servers.
+
+Other open items:
 
 - Failure has no action group yet, so it only appears in Monitor, Alerts and sends no email.
 - code review agent

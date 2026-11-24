@@ -5,20 +5,19 @@ from collections import Counter
 from pathlib import Path
 
 from dotenv import load_dotenv
-from vector_embedding.embeddings import get_embedding_model
+from indexing.data_embedding import get_embedding_model
 from langchain_community.vectorstores.azuresearch import AzureSearch
 from langchain_core.documents import Document
+from utility.require_settings import require_settings
 
 load_dotenv()  # reads the Azure settings from the .env file
 
-REQUIRED_SETTINGS = ("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
-
 
 def create_vector_store() -> AzureSearch:
-    """Connect to the Azure AI Search index. LangChain creates the index if it does not exist."""
-    missing = [name for name in REQUIRED_SETTINGS if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError(f"Missing settings in .env: {', '.join(missing)}")
+    """Connect to the Azure AI Search index for indexing. LangChain creates the index if it does not exist.
+    The query-time version (a timeout and retries on the search client) is retrieval/vector_store.py.
+    """
+    require_settings("AZURE_SEARCH_ENDPOINT", "AZURE_SEARCH_KEY")
 
     return AzureSearch(
         azure_search_endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
@@ -28,11 +27,11 @@ def create_vector_store() -> AzureSearch:
     )
 
 
-def make_chunk_ids(chunks: list[Document]) -> list[str]:
+def make_chunk_ids(doc_chunks: list[Document]) -> list[str]:
     """Stable ID per chunk (product, file, version, page, chunk number) so re-running updates instead of duplicating."""
     per_page: Counter[str] = Counter()
     ids = []
-    for chunk in chunks:
+    for chunk in doc_chunks:
         meta = chunk.metadata
         file_name = Path(meta["source"]).stem
         prefix = f"{meta['product_id']}-{file_name}-v{meta['document_version']}-p{meta['page']}"
@@ -56,10 +55,12 @@ def delete_source_chunks(vector_store: AzureSearch, source: str) -> int:
     return len(ids)
 
 
-def store_chunks(chunks: list[Document]) -> list[str]:
+def store_chunks(doc_chunks: list[Document]) -> list[str]:
     """Replace the file's entries in the index: remove the old ones, then embed and upload the new chunks."""
     vector_store = create_vector_store()
-    for source in sorted({chunk.metadata["source"] for chunk in chunks}):
+    for source in sorted({chunk.metadata["source"] for chunk in doc_chunks}):
         removed = delete_source_chunks(vector_store, source)
         print(f"Removed {removed} old entries for {source}")
-    return vector_store.add_documents(documents=chunks, keys=make_chunk_ids(chunks))
+    return vector_store.add_documents(
+        documents=doc_chunks, keys=make_chunk_ids(doc_chunks)
+    )
