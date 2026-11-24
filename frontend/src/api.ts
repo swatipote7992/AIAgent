@@ -2,7 +2,8 @@ import type { AskResponse } from "./types";
 
 // Empty in development (Vite proxies /api); set to the backend address when deployed.
 const API_URL = import.meta.env.VITE_API_URL ?? "";
-// Shared key the backend checks. Only reaches the browser of users who passed the sign-in.
+// Shared key the backend checks. The site is public, so anyone can read this key in the page: it is not a secret.
+// The real protection is the backend's rate limit and daily question ceiling (backend/api/rate_limiter.py).
 const API_KEY = import.meta.env.VITE_API_KEY ?? "";
 
 export async function askQuestion(question: string): Promise<AskResponse> {
