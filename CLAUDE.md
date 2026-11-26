@@ -8,7 +8,7 @@ A RAG app over fictional car insurance policy PDFs: LangChain, Azure OpenAI (`te
 - **No source code in the README.** Link the file path instead, for example `[ragapi.py](backend/api/ragapi.py)`. Shell commands to run are fine.
 - **Never deploy or change the live Azure app unless the owner says so.** Always ask first, every time, even for a small targeted rebuild. Re-indexing needs a yes too.
 - **Never commit, push, or open a PR on your own.** The one exception is the `/create-pr` skill ([SKILL.md](.claude/skills/create-pr/SKILL.md)): it may commit, push, and open a PR, but only after showing its pass/fail gate table and getting explicit approval for that specific run. Even then, if the staged scope includes anything under `.claude/` or `.env`, stop and leave that commit to the owner's own terminal — the secrets hook enforces this and will not be worked around.
-- **Name every new file in snake_case with a specific name** (`exception_handler.py`, not `errors.py`; no spaces, no run-together words).
+- **Name every new file in snake_case with a specific name** (`exception_handler.py`, not `errors.py`; no spaces, no run-together words). The one exception: `.claude/skills/` and `.claude/agents/` folders use kebab-case (`create-pr`, `code-review-agent`), matching the existing Spec Kit skill names (`speckit-constitution`, etc.) and Claude Code's own slash-command convention.
 - **Keep README entries short:** say what was done and why, not how it was tested or deployed.
 - Package management is **pip + `backend/requirements.txt`** (pinned). uv was dropped for the project; `uvx` is only used to run Spec Kit.
 - Be honest in reports: say what was verified and what was not. Do not claim something works in Azure unless it was checked there.

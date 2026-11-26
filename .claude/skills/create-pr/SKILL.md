@@ -62,14 +62,14 @@ If any row is `FAIL`, stop here — do not draft the PR, push, or ask for a comm
 
 Only if every gate in step 7 is green:
 - Take the text the user passed as the skill argument (`/create-pr <text>`). If none was given, **ask the user for it** — do not invent, expand, or auto-draft a message.
-- Use that exact text as **both** the commit message and the PR title. Do not reword it, add a summary, or add a `## Summary`/`## Test plan` body unless the user's own text already contains one — the only addition is the attribution line/footer from this session's instructions, appended as-is, never blended into the user's wording.
+- Use that exact text as **both** the commit message and the PR title/body, with no additions. Do not reword it, add a summary, add a `## Summary`/`## Test plan` body, or append any attribution line or footer — this skill's commits and PRs carry no Claude/Claude Code attribution.
 
 ### 9. Get approval, then commit, push and open the PR
 
 Show the gate table (step 7) and the exact text from step 8, and ask for explicit approval before doing anything irreversible. Only on approval:
-1. `git commit -m "<user's text>"` (plus the attribution line) — commits exactly the staged files from step 1, nothing more.
+1. `git commit -m "<user's text>"` — no attribution line, no additions. Commits exactly the staged files from step 1, nothing more.
 2. `git push -u origin HEAD` (or a plain `git push` if the branch already tracks a remote).
-3. `gh pr create --base main --title "<user's text>" --body "<user's text>"` (plus the attribution footer; body passed via a heredoc).
+3. `gh pr create --base main --title "<user's text>" --body "<user's text>"` — no attribution footer, body passed via a heredoc if the text spans multiple lines.
 4. Run `git status` after the commit to confirm it succeeded, and return the PR URL.
 
 If the user does not approve, stop — do not commit, push, or open anything. This is the one explicit case where this skill commits on the user's behalf; every other git workflow in this project stays commit-by-hand.
